@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Активы</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f0f13;
+    --card: #1a1a22;
+    --card2: #22222e;
+    --border: #2e2e3e;
+    --accent: #7c6af7;
+    --accent2: #5eead4;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e2f0;
+    --sub: #8888aa;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding-bottom: 80px;
+  }
+
+  /* ── Шапка ── */
+  .header {
+    padding: 20px 16px 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; }
+  .header .sub { font-size: 13px; color: var(--sub); margin-top: 2px; }
+
+  /* ── Фильтр валюты ── */
+  .currency-bar {
+    padding: 0 16px 14px;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .currency-bar::-webkit-scrollbar { display: none; }
+  .currency-btn {
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--sub);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s;
+  }
+  .currency-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* ── Карточки суммарные ── */
+  .summary-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 0 16px 14px;
+  }
+  .sum-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
+  .sum-card .label { font-size: 11px; color: var(--sub); text-transform: uppercase; letter-spacing: .5px; }
+  .sum-card .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .sum-card .value.big { font-size: 24px; color: var(--accent2); }
+  .sum-card.full { grid-column: 1 / -1; }
+
+  /* ── Секции ── */
+  .section { padding: 0 16px 16px; }
+  .section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sub);
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    margin-bottom: 10px;
+  }
+
+  /* ── Карточка с графиком ── */
+  .chart-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .chart-card canvas { max-height: 220px; }
+
+  /* ── Позиции ── */
+  .positions-list { display: flex; flex-direction: column; gap: 8px; }
+  .pos-card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .pos-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px;
+    flex-shrink: 0;
+  }
+  .pos-body { flex: 1; min-width: 0; }
+  .pos-ticker { font-weight: 700; font-size: 15px; }
+  .pos-cat { font-size: 12px; color: var(--sub); margin-top: 1px; }
+  .pos-right { text-align: right; flex-shrink: 0; }
+  .pos-value { font-weight: 700; font-size: 15px; }
+  .pos-pct { font-size: 12px; color: var(--sub); margin-top: 1px; }
+  .pos-qty { font-size: 11px; color: var(--sub); margin-top: 2px; }
+
+  /* прогресс-бар внутри позиции */
+  .pos-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; margin-top: 6px; }
+  .pos-bar { height: 3px; border-radius: 2px; transition: width .4s; }
+
+  /* ── По категориям ── */
+  .cat-list { display: flex; flex-direction: column; gap: 8px; }
+  .cat-row {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .cat-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .cat-name { flex: 1; font-size: 14px; }
+  .cat-val { font-size: 14px; font-weight: 600; }
+  .cat-pct { font-size: 12px; color: var(--sub); width: 36px; text-align: right; }
+  .cat-bar-wrap { width: 100%; height: 3px; background: var(--border); border-radius: 2px; margin-top: 3px; }
+  .cat-bar { height: 3px; border-radius: 2px; }
+
+  /* ── Инсайты ── */
+  .insights-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 0 16px 16px;
+  }
+  .insight-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .insight-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .insight-card.runway::before { background: linear-gradient(90deg, #7c6af7, #5eead4); }
+  .insight-card.passive::before { background: linear-gradient(90deg, #4ade80, #fbbf24); }
+  .insight-card .i-icon { font-size: 22px; margin-bottom: 6px; }
+  .insight-card .i-title { font-size: 11px; color: var(--sub); text-transform: uppercase; letter-spacing: .5px; }
+  .insight-card .i-main { font-size: 22px; font-weight: 800; margin: 4px 0 2px; line-height: 1.1; }
+  .insight-card .i-sub { font-size: 11px; color: var(--sub); line-height: 1.4; }
+  .insight-card .i-note { font-size: 10px; color: var(--sub); margin-top: 6px; opacity: .7; }
+  .insight-card.runway .i-main { color: var(--accent2); }
+  .insight-card.passive .i-main { color: var(--green); }
+
+  /* ── Раскрывающийся график позиции ── */
+  .pos-wrap { display: flex; flex-direction: column; }
+  .pos-chart-area {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height .35s ease, opacity .25s ease;
+    opacity: 0;
+  }
+  .pos-chart-area.open {
+    max-height: 220px;
+    opacity: 1;
+  }
+  .pos-chart-inner {
+    background: var(--card2);
+    border-radius: 0 0 12px 12px;
+    padding: 10px 12px 12px;
+    margin-top: -4px;
+  }
+  .pos-chart-inner canvas { max-height: 160px; }
+  .pos-chart-loading {
+    text-align: center; color: var(--sub); font-size: 12px; padding: 20px 0;
+  }
+  /* Карточка кликабельна */
+  .pos-card { cursor: pointer; }
+  .pos-card.expanded {
+    border-radius: 12px 12px 0 0;
+  }
+
+  /* ── Кнопки действий на позиции ── */
+  .pos-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-left: 4px;
+    flex-shrink: 0;
+  }
+  .pos-action-btn {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    transition: opacity .15s;
+  }
+  .pos-action-btn:active { opacity: .6; }
+  .btn-edit { background: #7c6af722; color: #7c6af7; }
+  .btn-delete { background: #f8717122; color: #f87171; }
+
+  /* ── Модальное окно ── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.6);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: flex-end; justify-content: center;
+    z-index: 200;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .modal-overlay.hidden { display: none !important; }
+  .modal {
+    background: var(--card2);
+    border-radius: 20px 20px 0 0;
+    padding: 20px 20px 32px;
+    width: 100%; max-width: 480px;
+  }
+  .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+  .modal-ticker { color: var(--accent); }
+  .modal-label { font-size: 12px; color: var(--sub); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .4px; }
+  .modal-input {
+    width: 100%; background: var(--card);
+    border: 1px solid var(--border); border-radius: 12px;
+    color: var(--text); font-size: 18px; font-weight: 600;
+    padding: 12px 14px; outline: none; margin-bottom: 16px;
+  }
+  .modal-input:focus { border-color: var(--accent); }
+  .modal-row { display: flex; gap: 10px; }
+  .modal-btn {
+    flex: 1; padding: 14px;
+    border-radius: 12px; border: none;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: opacity .15s;
+  }
+  .modal-btn:active { opacity: .7; }
+  .btn-cancel { background: var(--card); color: var(--sub); }
+  .btn-save { background: var(--accent); color: #fff; }
+  .btn-confirm-delete { background: #f87171; color: #fff; }
+
+  /* confirm delete */
+  .confirm-text { font-size: 14px; color: var(--sub); margin-bottom: 20px; line-height: 1.5; }
+
+  /* ── Bottom nav ── */
+  .bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    display: flex;
+    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+    z-index: 100;
+  }
+  .nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 3px; text-decoration: none; color: var(--sub);
+    font-size: 10px; font-weight: 500; padding: 4px 0;
+    transition: color .15s;
+  }
+  .nav-item .icon { font-size: 20px; }
+  .nav-item.active { color: var(--accent); }
+
+  /* ── Лоадер ── */
+  .loader {
+    display: flex; align-items: center; justify-content: center;
+    padding: 60px 0; color: var(--sub); font-size: 14px;
+  }
+  .spinner {
+    width: 24px; height: 24px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; margin-right: 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Портфель</h1>
+    <div class="sub" id="last-updated"></div>
+  </div>
+</div>
+
+<div class="currency-bar">
+  <button class="currency-btn active" data-cur="USD">USD</button>
+  <button class="currency-btn" data-cur="RUB">RUB</button>
+  <button class="currency-btn" data-cur="USDT">USDT</button>
+  <button class="currency-btn" data-cur="VND">VND</button>
+</div>
+
+<div id="loader" class="loader"><div class="spinner"></div>Загружаем...</div>
+<div id="content" class="hidden">
+
+  <!-- Summary -->
+  <div class="summary-row">
+    <div class="sum-card full">
+      <div class="label">Общая стоимость</div>
+      <div class="value big" id="total-value">—</div>
+    </div>
+    <div class="sum-card">
+      <div class="label">Позиций</div>
+      <div class="value" id="total-positions">—</div>
+    </div>
+    <div class="sum-card">
+      <div class="label">Категорий</div>
+      <div class="value" id="total-categories">—</div>
+    </div>
+  </div>
+
+  <!-- Инсайты -->
+  <div class="insights-row">
+    <div class="insight-card runway">
+      <div class="i-icon">🏖️</div>
+      <div class="i-title">Финансовый запас</div>
+      <div class="i-main" id="runway-months">—</div>
+      <div class="i-sub" id="runway-sub">месяцев жизни</div>
+      <div class="i-note" id="runway-note"></div>
+    </div>
+    <div class="insight-card passive">
+      <div class="i-icon">💰</div>
+      <div class="i-title">Пассивный доход</div>
+      <div class="i-main" id="passive-avg">—</div>
+      <div class="i-sub">среднемесячный</div>
+      <div class="i-note" id="passive-note"></div>
+    </div>
+  </div>
+
+  <!-- Динамика -->
+  <div class="section">
+    <div class="section-title">Динамика портфеля</div>
+    <div class="chart-card">
+      <canvas id="timeline-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Распределение -->
+  <div class="section">
+    <div class="section-title">Распределение</div>
+    <div class="chart-card" style="display:flex;gap:16px;align-items:center;">
+      <canvas id="donut-chart" style="max-width:140px;max-height:140px;flex-shrink:0;"></canvas>
+      <div class="cat-list" id="cat-list" style="flex:1;min-width:0;"></div>
+    </div>
+  </div>
+
+  <!-- Все позиции -->
+  <div class="section">
+    <div class="section-title">Позиции</div>
+    <div class="positions-list" id="positions-list"></div>
+  </div>
+
+</div>
+
+<!-- Модал редактирования -->
+<div class="modal-overlay hidden" id="edit-modal">
+  <div class="modal">
+    <div class="modal-title">Изменить количество — <span class="modal-ticker" id="edit-ticker"></span></div>
+    <div class="modal-label">Количество</div>
+    <input class="modal-input" id="edit-qty" type="number" step="any" min="0" inputmode="decimal">
+    <div class="modal-row">
+      <button class="modal-btn btn-cancel" id="edit-cancel">Отмена</button>
+      <button class="modal-btn btn-save" id="edit-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модал подтверждения удаления -->
+<div class="modal-overlay hidden" id="delete-modal">
+  <div class="modal">
+    <div class="modal-title">Закрыть позицию</div>
+    <div class="confirm-text">
+      Убрать <strong id="delete-ticker"></strong> из портфеля?<br>
+      История записей сохранится, будет добавлена запись с qty = 0.
+    </div>
+    <div class="modal-row">
+      <button class="modal-btn btn-cancel" id="delete-cancel">Отмена</button>
+      <button class="modal-btn btn-confirm-delete" id="delete-confirm">Закрыть позицию</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav">
+  <a href="/" class="nav-item"><span class="icon">💸</span><span>Расходы</span></a>
+  <a href="/analytics" class="nav-item"><span class="icon">📊</span><span>Аналитика</span></a>
+  <a href="/assets" class="nav-item active"><span class="icon">🏦</span><span>Активы</span></a>
+  <a href="/history" class="nav-item"><span class="icon">🕐</span><span>История</span></a>
+</nav>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) tg.ready();
+
+const DEV_USER_ID = 614688432;
+const userId = tg?.initDataUnsafe?.user?.id || DEV_USER_ID;
+
+// Цвета категорий
+const CAT_COLORS = [
+  '#7c6af7','#5eead4','#fbbf24','#f87171',
+  '#34d399','#60a5fa','#f472b6','#a78bfa',
+];
+// Иконки категорий
+const CAT_ICONS = {
+  'Акции': 'ST', 'Крипта': 'CR', 'Вклад': 'DP',
+  'Инвесткопилка': 'IS', 'Кэш': 'CA', 'Недвижимость': 'RE',
+};
+
+let currency = 'USD';
+let timelineChart = null;
+let donutChart = null;
+
+function fmt(val, cur) {
+  if (cur === 'VND') return new Intl.NumberFormat('ru').format(Math.round(val)) + ' ₫';
+  if (cur === 'RUB') return new Intl.NumberFormat('ru').format(Math.round(val)) + ' ₽';
+  if (cur === 'USDT' || cur === 'USD') {
+    return '$' + new Intl.NumberFormat('en', {minimumFractionDigits: val < 10 ? 2 : 0, maximumFractionDigits: val < 10 ? 2 : 0}).format(val);
+  }
+  return new Intl.NumberFormat('ru', {maximumFractionDigits: 2}).format(val) + ' ' + cur;
+}
+
+function fmtQty(qty) {
+  if (qty >= 1000) return new Intl.NumberFormat('ru').format(Math.round(qty));
+  if (qty >= 1) return new Intl.NumberFormat('ru', {maximumFractionDigits: 4}).format(qty);
+  return qty.toFixed(8).replace(/\.?0+$/, '');
+}
+
+function catColor(name, idx) {
+  return CAT_COLORS[idx % CAT_COLORS.length];
+}
+
+async function load() {
+  // Уничтожаем кешированные графики позиций при смене валюты/перезагрузке
+  Object.values(_chartInstances).forEach(c => c.destroy());
+  Object.keys(_chartInstances).forEach(k => delete _chartInstances[k]);
+
+  document.getElementById('loader').classList.remove('hidden');
+  document.getElementById('content').classList.add('hidden');
+
+  const res = await fetch(`/api/assets?user_id=${userId}&currency=${currency}`);
+  const data = await res.json();
+
+  document.getElementById('loader').classList.add('hidden');
+  document.getElementById('content').classList.remove('hidden');
+
+  render(data);
+}
+
+function fmtMonths(m) {
+  if (m === null) return '—';
+  if (m >= 24) return (m / 12).toFixed(1).replace('.0', '') + ' лет';
+  return m + ' мес.';
+}
+
+function render(data) {
+  const { total, positions, by_category, timeline, currency: cur, runway, passive_income } = data;
+
+  // Summary
+  document.getElementById('total-value').textContent = fmt(total, cur);
+  document.getElementById('total-positions').textContent = positions.length;
+  document.getElementById('total-categories').textContent = by_category.length;
+  document.getElementById('last-updated').textContent =
+    'Обновлено ' + new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit'});
+
+  // Runway
+  document.getElementById('runway-months').textContent = fmtMonths(runway.months);
+  document.getElementById('runway-sub').textContent =
+    runway.months !== null ? 'при расходах ' + fmt(runway.avg_monthly_expense, cur) + '/мес' : 'нет данных о расходах';
+  document.getElementById('runway-note').textContent =
+    runway.expense_months_count ? `среднее за ${runway.expense_months_count} мес.` : '';
+
+  // Passive income
+  const hasPassive = passive_income.avg_monthly > 0;
+  document.getElementById('passive-avg').textContent = hasPassive ? fmt(passive_income.avg_monthly, cur) : '—';
+  if (hasPassive) {
+    const thisM = passive_income.this_month > 0 ? `этот мес.: ${fmt(passive_income.this_month, cur)}` : 'в этом мес.: нет';
+    document.getElementById('passive-note').textContent = thisM;
+    // Добавляем % от расходов
+    const pctOfExpense = runway.avg_monthly_expense > 0
+      ? Math.round(passive_income.avg_monthly / runway.avg_monthly_expense * 100) : 0;
+    document.querySelector('.insight-card.passive .i-sub').textContent =
+      `покрывает ${pctOfExpense}% расходов`;
+  } else {
+    document.getElementById('passive-note').textContent = 'нет пассивного дохода';
+    document.querySelector('.insight-card.passive .i-sub').textContent = 'среднемесячный';
+  }
+
+  // Timeline chart
+  if (timelineChart) timelineChart.destroy();
+  const tlCtx = document.getElementById('timeline-chart').getContext('2d');
+  const gradient = tlCtx.createLinearGradient(0, 0, 0, 200);
+  gradient.addColorStop(0, 'rgba(124,106,247,0.35)');
+  gradient.addColorStop(1, 'rgba(124,106,247,0)');
+  timelineChart = new Chart(tlCtx, {
+    type: 'line',
+    data: {
+      labels: timeline.map(t => t.label),
+      datasets: [{
+        data: timeline.map(t => t.value),
+        borderColor: '#7c6af7',
+        backgroundColor: gradient,
+        borderWidth: 2,
+        pointRadius: timeline.length <= 12 ? 4 : 2,
+        pointBackgroundColor: '#7c6af7',
+        fill: true,
+        tension: 0.35,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: { label: ctx => ' ' + fmt(ctx.parsed.y, cur) }
+      }},
+      scales: {
+        x: { grid: { color: '#2e2e3e' }, ticks: { color: '#8888aa', font: { size: 11 } } },
+        y: { grid: { color: '#2e2e3e' }, ticks: {
+          color: '#8888aa', font: { size: 11 },
+          callback: v => fmt(v, cur),
+        }},
+      }
+    }
+  });
+
+  // Donut chart
+  if (donutChart) donutChart.destroy();
+  const donutCtx = document.getElementById('donut-chart').getContext('2d');
+  donutChart = new Chart(donutCtx, {
+    type: 'doughnut',
+    data: {
+      labels: by_category.map(c => c.name),
+      datasets: [{
+        data: by_category.map(c => c.value),
+        backgroundColor: by_category.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]),
+        borderWidth: 0,
+        hoverOffset: 6,
+      }]
+    },
+    options: {
+      cutout: '70%',
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: { label: ctx => ' ' + fmt(ctx.parsed, cur) + ' (' + by_category[ctx.dataIndex].pct + '%)' }
+      }},
+    }
+  });
+
+  // Category list
+  const catEl = document.getElementById('cat-list');
+  catEl.innerHTML = '';
+  by_category.forEach((cat, i) => {
+    const color = CAT_COLORS[i % CAT_COLORS.length];
+    catEl.innerHTML += `
+      <div class="cat-row">
+        <div class="cat-dot" style="background:${color}"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+            <span class="cat-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${cat.name}</span>
+            <span class="cat-val">${fmt(cat.value, cur)}</span>
+            <span class="cat-pct">${cat.pct}%</span>
+          </div>
+          <div class="cat-bar-wrap">
+            <div class="cat-bar" style="width:${cat.pct}%;background:${color}"></div>
+          </div>
+        </div>
+      </div>`;
+  });
+
+  // Positions
+  const posEl = document.getElementById('positions-list');
+  posEl.innerHTML = '';
+  positions.forEach((p, i) => {
+    const colorIdx = by_category.findIndex(c => c.name === p.category);
+    const color = CAT_COLORS[(colorIdx >= 0 ? colorIdx : i) % CAT_COLORS.length];
+    const icon = CAT_ICONS[p.category] || p.ticker.slice(0, 2);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pos-wrap';
+
+    const card = document.createElement('div');
+    card.className = 'pos-card';
+    card.innerHTML = `
+      <div class="pos-icon" style="background:${color}22;color:${color}">${icon}</div>
+      <div class="pos-body">
+        <div class="pos-ticker">${p.ticker}</div>
+        <div class="pos-cat">${p.category}</div>
+        <div class="pos-bar-wrap">
+          <div class="pos-bar" style="width:${p.pct}%;background:${color}"></div>
+        </div>
+      </div>
+      <div class="pos-right">
+        <div class="pos-value">${fmt(p.value, cur)}</div>
+        <div class="pos-pct">${p.pct}%</div>
+        <div class="pos-qty">${fmtQty(p.qty)} шт.</div>
+      </div>
+      <div class="pos-actions">
+        <button class="pos-action-btn btn-edit" title="Изменить">✏️</button>
+        <button class="pos-action-btn btn-delete" title="Закрыть">🗑️</button>
+      </div>`;
+
+    const chartArea = document.createElement('div');
+    chartArea.className = 'pos-chart-area';
+    chartArea.innerHTML = `<div class="pos-chart-inner">
+      <div class="pos-chart-loading">Загрузка...</div>
+      <canvas style="display:none"></canvas>
+    </div>`;
+
+    // Toggle при клике на карточку (не на кнопки действий)
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.pos-actions')) return;
+      const isOpen = chartArea.classList.contains('open');
+      if (isOpen) {
+        chartArea.classList.remove('open');
+        card.classList.remove('expanded');
+      } else {
+        chartArea.classList.add('open');
+        card.classList.add('expanded');
+        loadPosChart(p, color, chartArea, cur);
+      }
+    });
+
+    card.querySelector('.btn-edit').addEventListener('click', () => openEdit(p));
+    card.querySelector('.btn-delete').addEventListener('click', () => openDelete(p));
+
+    wrap.appendChild(card);
+    wrap.appendChild(chartArea);
+    posEl.appendChild(wrap);
+  });
+}
+
+// ── График позиции (lazy) ──
+const _chartInstances = {};
+
+async function loadPosChart(pos, color, chartArea, cur) {
+  const canvas = chartArea.querySelector('canvas');
+  const loading = chartArea.querySelector('.pos-chart-loading');
+
+  // Уже загружен
+  if (_chartInstances[pos.ticker]) return;
+
+  try {
+    const res = await fetch(`/api/asset-history?user_id=${userId}&ticker=${encodeURIComponent(pos.ticker)}&currency=${currency}`);
+    const data = await res.json();
+    const pts = data.points;
+
+    loading.style.display = 'none';
+    canvas.style.display = 'block';
+
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, 140);
+    grad.addColorStop(0, color + '55');
+    grad.addColorStop(1, color + '00');
+
+    // Маркеры: снапшот = оранжевый кружок, текущая = белый, обычная = без точки
+    const pointRadii  = pts.map(p => p.is_current ? 5 : p.is_snapshot ? 4 : 0);
+    const pointColors = pts.map(p => p.is_current ? '#ffffff' : p.is_snapshot ? '#fbbf24' : color);
+    const pointBorderColors = pts.map(p => p.is_current ? color : p.is_snapshot ? '#f59e0b' : color);
+    const pointBorderWidths = pts.map(p => (p.is_current || p.is_snapshot) ? 2 : 0);
+
+    _chartInstances[pos.ticker] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: pts.map(p => p.is_current ? 'Сейчас' : p.label),
+        datasets: [
+          {
+            label: 'Стоимость',
+            data: pts.map(p => p.value),
+            borderColor: color,
+            backgroundColor: grad,
+            borderWidth: 2,
+            pointRadius: pointRadii,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: pointBorderColors,
+            pointBorderWidth: pointBorderWidths,
+            pointHoverRadius: 6,
+            fill: true,
+            tension: 0.3,
+            yAxisID: 'yVal',
+          },
+          {
+            label: 'Кол-во',
+            data: pts.map(p => p.qty),
+            borderColor: '#ffffff33',
+            borderWidth: 1,
+            borderDash: [4, 3],
+            pointRadius: 0,
+            fill: false,
+            tension: 0.3,
+            yAxisID: 'yQty',
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ctx.datasetIndex === 0
+                ? ' ' + fmt(ctx.parsed.y, cur)
+                : ' ' + fmtQty(ctx.parsed.y) + ' шт.',
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: '#2e2e3e' }, ticks: { color: '#8888aa', font: { size: 10 }, maxTicksLimit: 6 } },
+          yVal: {
+            position: 'left',
+            grid: { color: '#2e2e3e' },
+            ticks: { color: '#8888aa', font: { size: 10 }, callback: v => fmt(v, cur) },
+          },
+          yQty: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            ticks: { color: '#8888aa44', font: { size: 9 }, callback: v => fmtQty(v) },
+          },
+        }
+      }
+    });
+  } catch(e) {
+    loading.textContent = 'Ошибка загрузки';
+  }
+}
+
+// ── Состояние модалей ──
+let _editPos = null;
+let _deletePos = null;
+
+function openEdit(pos) {
+  _editPos = pos;
+  document.getElementById('edit-ticker').textContent = pos.ticker;
+  document.getElementById('edit-qty').value = pos.qty;
+  document.getElementById('edit-modal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('edit-qty').focus(), 50);
+}
+
+function openDelete(pos) {
+  _deletePos = pos;
+  document.getElementById('delete-ticker').textContent = pos.ticker;
+  document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeModals() {
+  document.getElementById('edit-modal').classList.add('hidden');
+  document.getElementById('delete-modal').classList.add('hidden');
+}
+
+async function saveSnapshot(ticker, category, amount) {
+  const res = await fetch('/api/entry', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      user_id: userId,
+      mode: 'asset',
+      amount: amount,
+      currency: ticker,
+      category: category,
+    }),
+  });
+  if (!res.ok) throw new Error('save failed');
+}
+
+document.getElementById('edit-cancel').addEventListener('click', closeModals);
+document.getElementById('delete-cancel').addEventListener('click', closeModals);
+
+document.getElementById('edit-save').addEventListener('click', async () => {
+  const newQty = parseFloat(document.getElementById('edit-qty').value);
+  if (isNaN(newQty) || newQty < 0) return;
+  try {
+    await saveSnapshot(_editPos.ticker, _editPos.category, newQty);
+    closeModals();
+    load();
+  } catch { alert('Ошибка сохранения'); }
+});
+
+document.getElementById('delete-confirm').addEventListener('click', async () => {
+  try {
+    await saveSnapshot(_deletePos.ticker, _deletePos.category, 0);
+    closeModals();
+    load();
+  } catch { alert('Ошибка'); }
+});
+
+// Закрытие по клику на фон
+document.getElementById('edit-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModals(); });
+document.getElementById('delete-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModals(); });
+
+// Переключение валюты
+document.querySelectorAll('.currency-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.currency-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currency = btn.dataset.cur;
+    load();
+  });
+});
+
+load();
+</script>
+</body>
+</html>

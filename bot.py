@@ -5,7 +5,6 @@ SmartSavings Mini App Bot
 import json
 import logging
 import asyncio
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart
@@ -13,6 +12,7 @@ from aiogram.types import Message, WebAppInfo, InlineKeyboardMarkup, InlineKeybo
 from aiogram.enums import ParseMode
 
 from config import settings
+import db_repo
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -60,17 +60,33 @@ async def on_webapp_data(m: Message):
 
     meta = MODE_META.get(mode, MODE_META["expense"])
 
+    user = m.from_user
+    try:
+        entry_id = await asyncio.to_thread(
+            db_repo.save_entry,
+            user_id=user.id,
+            mode=mode,
+            amount=float(amount),
+            currency_code=currency,
+            category_name=category or None,
+            note=note or None,
+            username=user.username,
+        )
+        log.info("Saved entry id=%d for user=%d: %s", entry_id, user.id, data)
+    except Exception as e:
+        log.error("Failed to save entry for user=%d: %s", user.id, e)
+        await m.answer("❌ Ошибка при сохранении. Попробуйте ещё раз.")
+        return
+
     lines = [
         f"{meta['icon']} <b>{meta['title']} сохранён</b>",
         "",
         f"Сумма: <b>{amount} {currency}</b>",
-        f"Категория: <b>{category}</b>",
     ]
+    if category:
+        lines.append(f"Категория: <b>{category}</b>")
     if note:
         lines.append(f"Заметка: <i>{note}</i>")
-
-    # TODO: сохранить в БД (подключить repo из SmartSavings)
-    log.info("New entry: %s", data)
 
     await m.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 

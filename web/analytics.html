@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>SmartSavings — Аналитика</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:    #0f0f13;
+      --bg2:   #16161e;
+      --surf:  rgba(255,255,255,0.05);
+      --bord:  rgba(255,255,255,0.09);
+      --text:  #e8e8f0;
+      --muted: rgba(232,232,240,0.45);
+      --exp:   #f04f6a;
+      --inc:   #34d399;
+      --ast:   #818cf8;
+      --r:     14px;
+    }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #0f0f13 !important;
+      color: #e8e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+
+    /* ── Layout ── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+      background: #0f0f13;
+    }
+
+    /* ── Header ── */
+    #header {
+      flex-shrink: 0;
+      padding: 10px 12px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #header-row1 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    #header h1 {
+      font-size: 17px;
+      font-weight: 700;
+      color: #e8e8f0;
+    }
+    /* ── Currency switcher ── */
+    #currency-tabs {
+      display: flex;
+      gap: 4px;
+      background: #16161e;
+      border-radius: 10px;
+      padding: 3px;
+    }
+    .cur-btn {
+      padding: 6px 14px;
+      border: none;
+      background: transparent;
+      border-radius: 8px;
+      color: rgba(232,232,240,0.45);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s;
+      letter-spacing: 0.3px;
+    }
+    .cur-btn.active[data-c="RUB"] { background: rgba(52,211,153,0.20); color: #34d399; }
+    .cur-btn.active[data-c="VND"] { background: rgba(240,79,106,0.20); color: #f04f6a; }
+    .cur-btn.active[data-c="USD"] { background: rgba(251,191,36,0.20); color: #fbbf24; }
+    /* ── Period tabs ── */
+    #period-tabs {
+      display: flex;
+      gap: 3px;
+      background: #16161e;
+      border-radius: 10px;
+      padding: 3px;
+    }
+    .period-btn {
+      padding: 5px 10px;
+      border: none;
+      background: transparent;
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s;
+    }
+    .period-btn.active { background: rgba(129,140,248,0.25); color: #818cf8; }
+
+    /* ── Scroll area ── */
+    #scroll {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px 12px 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scrollbar-width: none;
+    }
+    #scroll::-webkit-scrollbar { display: none; }
+
+    /* ── Stat cards ── */
+    #stat-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .stat-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: var(--r);
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-label { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.8px; text-transform: uppercase; }
+    .stat-value { font-size: 15px; font-weight: 700; line-height: 1.2; word-break: break-all; }
+    .stat-sub   { font-size: 10px; color: var(--muted); }
+    .stat-card.exp .stat-value { color: var(--exp); }
+    .stat-card.inc .stat-value { color: var(--inc); }
+    .stat-card.cnt .stat-value { color: var(--ast); }
+
+    /* ── Chart card ── */
+    .chart-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: var(--r);
+      padding: 14px;
+    }
+    .chart-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+    .chart-wrap {
+      position: relative;
+    }
+
+    /* ── Donut legend ── */
+    #cat-legend {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .leg-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .leg-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .leg-name { flex: 1; font-size: 12px; color: var(--text); }
+    .leg-pct  { font-size: 12px; font-weight: 600; color: var(--muted); }
+    .leg-bar-wrap {
+      width: 60px; height: 4px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .leg-bar { height: 100%; border-radius: 2px; }
+
+    /* ── Loading / empty ── */
+    #loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      height: 200px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: var(--ast);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Bottom nav ── */
+    #bottom-nav {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 60px;
+      background: #16161e;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      z-index: 50;
+    }
+    .nav-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      letter-spacing: 0.3px;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .nav-btn .nav-icon { font-size: 20px; line-height: 1; }
+    .nav-btn.active { color: var(--ast); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <div id="header">
+    <div id="header-row1">
+      <h1>📊 Аналитика</h1>
+      <div id="period-tabs">
+        <button class="period-btn" data-p="1m" onclick="setPeriod('1m')">1М</button>
+        <button class="period-btn active" data-p="6m" onclick="setPeriod('6m')">6М</button>
+        <button class="period-btn" data-p="1y" onclick="setPeriod('1y')">1Г</button>
+        <button class="period-btn" data-p="all" onclick="setPeriod('all')">Всё</button>
+      </div>
+    </div>
+    <div id="currency-tabs">
+      <button class="cur-btn" data-c="RUB" onclick="setCurrency('RUB')">₽ RUB</button>
+      <button class="cur-btn active" data-c="VND" onclick="setCurrency('VND')">₫ VND</button>
+      <button class="cur-btn" data-c="USD" onclick="setCurrency('USD')">$ USD</button>
+    </div>
+  </div>
+
+  <div id="scroll">
+    <div id="loading"><div class="spinner"></div><span>Загрузка...</span></div>
+  </div>
+
+</div>
+
+<!-- Bottom nav -->
+<nav id="bottom-nav">
+  <a class="nav-btn" href="/">
+    <span class="nav-icon">💳</span>Ввод
+  </a>
+  <a class="nav-btn active" href="/analytics">
+    <span class="nav-icon">📊</span>Аналитика
+  </a>
+  <a class="nav-btn" href="/assets">
+    <span class="nav-icon">🏦</span>Активы
+  </a>
+  <a class="nav-btn" href="/history">
+    <span class="nav-icon">🕐</span>История
+  </a>
+</nav>
+
+<script>
+var tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+var currentPeriod = '6m';
+var currentCurrency = 'VND';
+var userId = null;
+var charts = {};
+
+var CUR_SYMBOLS = { RUB: '₽', VND: '₫', USD: '$' };
+
+// Chart.js defaults
+Chart.defaults.color = 'rgba(232,232,240,0.5)';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+var CAT_COLORS = [
+  '#818cf8','#f04f6a','#34d399','#fbbf24','#60a5fa','#f472b6','#a78bfa','#2dd4bf'
+];
+
+function fmt(n, currency) {
+  if (!n) return '0 ' + (CUR_SYMBOLS[currency] || currency);
+  var sym = CUR_SYMBOLS[currency] || currency + ' ';
+  if (n >= 1000000000) return sym + (n/1000000000).toFixed(1) + 'B';
+  if (n >= 1000000)    return sym + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000)       return sym + Math.round(n/1000) + 'K';
+  return sym + Math.round(n);
+}
+
+function setPeriod(p) {
+  currentPeriod = p;
+  document.querySelectorAll('.period-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.p === p);
+  });
+  loadData();
+}
+
+function setCurrency(c) {
+  currentCurrency = c;
+  document.querySelectorAll('.cur-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.c === c);
+  });
+  loadData();
+}
+
+function loadData() {
+  if (!userId) return;
+
+  Object.keys(charts).forEach(function(k) { charts[k].destroy(); delete charts[k]; });
+
+  var scroll = document.getElementById('scroll');
+  scroll.innerHTML = '<div id="loading"><div class="spinner"></div><span>Загрузка...</span></div>';
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api/analytics?user_id=' + userId + '&period=' + currentPeriod + '&currency=' + currentCurrency, true);
+  xhr.onload = function() {
+    if (xhr.status !== 200) { scroll.innerHTML = '<div id="loading"><span>Ошибка загрузки</span></div>'; return; }
+    try { render(JSON.parse(xhr.responseText)); } catch(e) { console.error(e); }
+  };
+  xhr.send();
+}
+
+function yTick(v) {
+  if (v >= 1000000000) return (v/1000000000).toFixed(1)+'B';
+  if (v >= 1000000)    return (v/1000000).toFixed(0)+'M';
+  if (v >= 1000)       return (v/1000).toFixed(0)+'K';
+  return v;
+}
+var scaleOpts = {
+  x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: { size: 11 } } },
+  y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: { size: 10 }, callback: yTick } }
+};
+
+function render(d) {
+  var cur = d.currency;
+  var scroll = document.getElementById('scroll');
+  scroll.innerHTML = '';
+
+  // ── Stat cards ──
+  var hasIncome = d.monthly.some(function(m) { return m.income > 0; });
+  var cards = document.createElement('div');
+  cards.id = 'stat-cards';
+  cards.innerHTML =
+    '<div class="stat-card exp">' +
+      '<div class="stat-label">Расходы</div>' +
+      '<div class="stat-value">' + fmt(d.summary.exp_month, cur) + '</div>' +
+      '<div class="stat-sub">текущий месяц</div>' +
+    '</div>' +
+    (hasIncome ?
+    '<div class="stat-card inc">' +
+      '<div class="stat-label">Доходы</div>' +
+      '<div class="stat-value">' + fmt(d.summary.inc_month, cur) + '</div>' +
+      '<div class="stat-sub">текущий месяц</div>' +
+    '</div>' : '') +
+    '<div class="stat-card cnt">' +
+      '<div class="stat-label">Записей</div>' +
+      '<div class="stat-value">' + d.summary.total_entries + '</div>' +
+      '<div class="stat-sub">за период</div>' +
+    '</div>';
+  scroll.appendChild(cards);
+
+  // ── Grouped monthly bar (расходы + доходы вместе) ──
+  if (d.monthly && d.monthly.length > 0) {
+    var datasets = [{
+      label: 'Расходы',
+      data: d.monthly.map(function(m) { return m.expense; }),
+      backgroundColor: 'rgba(240,79,106,0.75)',
+      borderColor: '#f04f6a',
+      borderWidth: 1,
+      borderRadius: 5,
+      borderSkipped: false,
+    }];
+    if (hasIncome) {
+      datasets.push({
+        label: 'Доходы',
+        data: d.monthly.map(function(m) { return m.income; }),
+        backgroundColor: 'rgba(52,211,153,0.70)',
+        borderColor: '#34d399',
+        borderWidth: 1,
+        borderRadius: 5,
+        borderSkipped: false,
+      });
+    }
+    var mc = makeChartCard('ДОХОДЫ / РАСХОДЫ · ' + cur, 240);
+    charts['monthly'] = new Chart(mc.canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels: d.monthly.map(function(m) { return m.label; }), datasets: datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: hasIncome, labels: { color: 'rgba(232,232,240,0.6)', boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: function(ctx) { return ctx.dataset.label + ': ' + fmt(ctx.raw, cur); } } }
+        },
+        scales: scaleOpts,
+      }
+    });
+    scroll.appendChild(mc.card);
+  }
+
+  // ── Donut: top categories ──
+  if (d.top_categories && d.top_categories.length > 0) {
+    var dc = makeChartCard('ТОП КАТЕГОРИЙ · ' + cur, 180);
+    charts['donut'] = new Chart(dc.canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: d.top_categories.map(function(c) { return c.name; }),
+        datasets: [{
+          data: d.top_categories.map(function(c) { return c.amount; }),
+          backgroundColor: CAT_COLORS.slice(0, d.top_categories.length),
+          borderColor: '#0f0f13', borderWidth: 2, hoverOffset: 6,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '65%',
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(ctx) {
+            return ctx.label + ': ' + fmt(ctx.raw, cur) + ' (' + d.top_categories[ctx.dataIndex].pct + '%)';
+          }}}
+        }
+      }
+    });
+    var legend = document.createElement('div');
+    legend.id = 'cat-legend';
+    d.top_categories.forEach(function(cat, i) {
+      var row = document.createElement('div');
+      row.className = 'leg-row';
+      row.innerHTML =
+        '<div class="leg-dot" style="background:' + CAT_COLORS[i] + '"></div>' +
+        '<div class="leg-name">' + cat.name + '</div>' +
+        '<div class="leg-bar-wrap"><div class="leg-bar" style="width:' + cat.pct + '%;background:' + CAT_COLORS[i] + '"></div></div>' +
+        '<div class="leg-pct">' + cat.pct + '%</div>';
+      legend.appendChild(row);
+    });
+    dc.card.querySelector('.chart-card').appendChild(legend);
+    scroll.appendChild(dc.card);
+  }
+
+  // ── Daily trend line ──
+  if (d.daily_trend && d.daily_trend.some(function(x) { return x.amount > 0; })) {
+    var tc = makeChartCard('ДНЕВНЫЕ РАСХОДЫ · 30 ДНЕЙ · ' + cur, 180);
+    var ctx4 = tc.canvas.getContext('2d');
+    var grad = ctx4.createLinearGradient(0, 0, 0, 180);
+    grad.addColorStop(0, 'rgba(240,79,106,0.35)');
+    grad.addColorStop(1, 'rgba(240,79,106,0.02)');
+    charts['daily'] = new Chart(ctx4, {
+      type: 'line',
+      data: {
+        labels: d.daily_trend.map(function(x) { return x.label; }),
+        datasets: [{
+          data: d.daily_trend.map(function(x) { return x.amount; }),
+          borderColor: '#f04f6a', borderWidth: 2,
+          backgroundColor: grad, fill: true, tension: 0.4,
+          pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: '#f04f6a',
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode: 'index', intersect: false, callbacks: { label: function(ctx) { return fmt(ctx.raw, cur); } } }
+        },
+        scales: {
+          x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: { size: 10 }, maxTicksLimit: 6, maxRotation: 0 } },
+          y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: { size: 10 }, callback: yTick } }
+        }
+      }
+    });
+    scroll.appendChild(tc.card);
+  }
+}
+
+function makeChartCard(title, height) {
+  var outer = document.createElement('div');
+  var card = document.createElement('div');
+  card.className = 'chart-card';
+  var titleEl = document.createElement('div');
+  titleEl.className = 'chart-title';
+  titleEl.textContent = title;
+  card.appendChild(titleEl);
+  var wrap = document.createElement('div');
+  wrap.className = 'chart-wrap';
+  wrap.style.height = height + 'px';
+  var canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+  card.appendChild(wrap);
+  outer.appendChild(card);
+  return { card: outer, canvas: canvas };
+}
+
+// ── Init ──
+var tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+userId = (tgUser && tgUser.id) ? tgUser.id : 614688432;
+loadData();
+</script>
+</body>
+</html>

@@ -241,7 +241,7 @@
     /* ── Bottom: numpad + submit ── */
     #bottom-area {
       flex-shrink: 0;
-      padding: 6px 12px 12px;
+      padding: 6px 12px 72px;
       display: flex;
       flex-direction: column;
       gap: 7px;
@@ -282,6 +282,37 @@
     }
     #submit-btn:active { transform: scale(0.98); opacity: 0.85; }
     #submit-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+
+    /* ── Bottom nav ── */
+    #bottom-nav {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 60px;
+      background: #16161e;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      z-index: 50;
+    }
+    .nav-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      letter-spacing: 0.3px;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .nav-btn .nav-icon { font-size: 20px; line-height: 1; }
+    .nav-btn.active { color: var(--mode); }
 
     /* ── Compact on short windows ── */
     @media (max-height: 650px) {
@@ -449,6 +480,21 @@
   </div>
 </div>
 
+<nav id="bottom-nav">
+  <a class="nav-btn active" href="/">
+    <span class="nav-icon">💳</span>Ввод
+  </a>
+  <a class="nav-btn" href="/analytics">
+    <span class="nav-icon">📊</span>Аналитика
+  </a>
+  <a class="nav-btn" href="/assets">
+    <span class="nav-icon">🏦</span>Активы
+  </a>
+  <a class="nav-btn" href="/history">
+    <span class="nav-icon">🕐</span>История
+  </a>
+</nav>
+
 <div id="toast"></div>
 
 <script>
@@ -505,12 +551,17 @@ if (tg) {
   tg.ready();
   tg.expand();
   if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
-  // Fix keyboard on mobile: resize app to stable viewport height
   tg.onEvent('viewportChanged', function() {
     if (tg.viewportStableHeight) {
       document.getElementById('app').style.height = tg.viewportStableHeight + 'px';
     }
   });
+  // MainButton обрабатывает submit — всегда виден вне зависимости от высоты окна
+  if (tg.MainButton) {
+    tg.MainButton.onClick(submit);
+    // В Telegram прячем дублирующую кнопку из layout
+    document.getElementById('submit-btn').style.display = 'none';
+  }
 }
 
 // ── Note input: hide numpad when keyboard is open on mobile ──
@@ -634,17 +685,67 @@ function selectCategory(cat) {
 
 // ── Submit ──
 function updateSubmitBtn() {
-  var btn = document.getElementById('submit-btn');
   var ok  = state.amountStr && parseFloat(state.amountStr) > 0 && state.currency && state.category;
-  btn.disabled = !ok;
   var lbl = { expense:'Сохранить расход', income:'Сохранить доход', asset:'Сохранить актив' };
+
+  // Обычная кнопка (резерв для браузера / широкое окно)
+  var btn = document.getElementById('submit-btn');
+  btn.disabled = !ok;
   btn.textContent = ok ? lbl[state.mode] : 'Заполните все поля';
+
+  // Telegram MainButton — вне viewport приложения, всегда видна независимо от высоты окна
+  if (tg && tg.MainButton) {
+    tg.MainButton.setText(lbl[state.mode]);
+    tg.MainButton.setParams({ color: MODE_COLOR[state.mode], text_color: '#ffffff' });
+    if (ok) { tg.MainButton.show(); } else { tg.MainButton.hide(); }
+  }
 }
+
 function submit() {
-  var note    = document.getElementById('note-input').value.trim();
-  var payload = JSON.stringify({ mode:state.mode, amount:state.amountStr, currency:state.currency, category:state.category, note:note||null });
-  if (tg) { tg.sendData(payload); }
-  else { console.log(payload); toast('OK: ' + state.amountStr + ' ' + state.currency); }
+  var note = document.getElementById('note-input').value.trim();
+
+  // Блокируем повторное нажатие
+  var btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  if (tg && tg.MainButton) tg.MainButton.showProgress(false);
+
+  fetch('/api/entry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: currentUserId,
+      mode: state.mode,
+      amount: parseFloat(state.amountStr),
+      currency: state.currency,
+      category: state.category || null,
+      note: note || null
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.ok) {
+      toast('✓ Сохранено');
+      resetForm();
+    } else {
+      toast('Ошибка сохранения');
+      updateSubmitBtn();
+    }
+    if (tg && tg.MainButton) tg.MainButton.hideProgress();
+  })
+  .catch(function() {
+    toast('Ошибка сети');
+    updateSubmitBtn();
+    if (tg && tg.MainButton) tg.MainButton.hideProgress();
+  });
+}
+
+function resetForm() {
+  state.amountStr = '';
+  state.category  = null;
+  document.getElementById('amount-display').textContent = '0';
+  document.getElementById('note-input').value = '';
+  renderCategories();   // снимает выделение с категорий
+  updateSubmitBtn();    // скрывает MainButton, дизейблит обычную
 }
 
 // ── Modals ──
@@ -694,12 +795,8 @@ updateSubmitBtn();
 
 // Загружаем данные из БД по Telegram user_id
 var tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
-if (tgUser && tgUser.id) {
-  loadUserData(tgUser.id);
-} else {
-  // Dev-режим: используем первого пользователя из БД для тестирования
-  loadUserData(614688432);
-}
+var currentUserId = (tgUser && tgUser.id) ? tgUser.id : 614688432;
+loadUserData(currentUserId);
 </script>
 </body>
 </html>
