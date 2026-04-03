@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>SmartSavings</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:    #0f0f13;
+      --bg2:   #16161e;
+      --surf:  #1e1e28;
+      --bord:  rgba(255,255,255,0.09);
+      --text:  #e8e8f0;
+      --muted: rgba(232,232,240,0.45);
+      --r:     14px;
+      --rsm:   10px;
+      --mode:  #f04f6a;
+      --glow:  rgba(240,79,106,0.18);
+    }
+
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #0f0f13 !important;
+      color: #e8e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+
+    /* ── App shell ── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      background: #0f0f13;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ── Top bar (mode tabs) ── */
+    #top-bar {
+      flex-shrink: 0;
+      padding: 10px 12px 0;
+    }
+    #mode-tabs {
+      display: flex;
+      gap: 4px;
+      background: #16161e;
+      border-radius: var(--r);
+      padding: 4px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 8px 4px;
+      border: none;
+      background: transparent;
+      border-radius: 11px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s, color 0.2s;
+    }
+    .mode-btn.active[data-mode="expense"] { background: rgba(240,79,106,0.20); color: #f04f6a; }
+    .mode-btn.active[data-mode="income"]  { background: rgba(52,211,153,0.18); color: #34d399; }
+    .mode-btn.active[data-mode="asset"]   { background: rgba(129,140,248,0.20); color: #818cf8; }
+
+    /* ── Scroll area ── */
+    #scroll-area {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 10px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      scrollbar-width: none;
+    }
+    #scroll-area::-webkit-scrollbar { display: none; }
+
+    /* ── Amount card — glassmorphism, glow via ::before (no overflow:hidden) ── */
+    #amount-card {
+      position: relative;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: var(--r);
+      padding: 18px 20px 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      /* NO overflow:hidden — that was causing Desktop WebView issues */
+    }
+    /* Glow gradient rendered BEHIND content — z-index trick not needed since
+       ::before is painted in source order before children in normal flow */
+    #amount-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: var(--r);
+      background: radial-gradient(ellipse at 50% 0%, var(--glow) 0%, transparent 65%);
+      transition: background 0.4s;
+      pointer-events: none;
+      /* Sit behind children by going negative in local stacking context */
+      z-index: 0;
+    }
+    #amount-card > * { position: relative; z-index: 1; }
+
+    #amount-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+    }
+    #amount-display {
+      font-size: 44px;
+      font-weight: 700;
+      letter-spacing: -1px;
+      color: #fff;
+      min-height: 54px;
+      line-height: 1;
+      text-align: center;
+      word-break: break-all;
+      transition: color 0.25s;
+    }
+    #amount-display.placeholder { color: rgba(232,232,240,0.28); font-size: 32px; font-weight: 300; }
+    #amount-display.has-value   { color: var(--mode); }
+    #currency-badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 12px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.07);
+      color: var(--muted);
+      transition: all 0.2s;
+    }
+    #currency-badge.selected { background: rgba(255,255,255,0.12); color: #fff; }
+
+    /* ── Section labels ── */
+    .slabel {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      padding: 0 2px;
+    }
+
+    /* ── Currency chips — horizontal scroll ── */
+    #currency-scroll {
+      /* block + white-space is most compatible for h-scroll */
+      display: block;
+      white-space: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 3px 0 5px;
+      min-height: 38px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      font-size: 0;
+    }
+    #currency-scroll::-webkit-scrollbar { display: none; }
+
+    .chip {
+      display: inline-block;
+      vertical-align: middle;
+      height: 32px;
+      line-height: 30px;
+      padding: 0 15px;
+      margin-right: 6px;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.07);
+      color: #e8e8f0;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      font-family: inherit;
+      text-align: center;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .chip:last-child { margin-right: 0; }
+    .chip:active { background: rgba(255,255,255,0.16); }
+    .chip.selected { border-color: var(--mode); background: rgba(255,255,255,0.07); color: var(--mode); }
+    .chip.add-chip { color: var(--muted); font-size: 18px; line-height: 30px; padding: 0 13px; }
+
+    /* ── Category grid — 3 col, vertical scroll ── */
+    #category-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    .cat-btn {
+      padding: 9px 6px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: var(--rsm);
+      background: rgba(255,255,255,0.05);
+      color: #e8e8f0;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: center;
+      font-family: inherit;
+      line-height: 1.3;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .cat-btn:active { background: rgba(255,255,255,0.14); }
+    .cat-btn.selected { border-color: var(--mode); color: var(--mode); font-weight: 600; background: rgba(255,255,255,0.07); }
+
+    /* ── Note input ── */
+    #note-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: var(--rsm);
+      padding: 0 12px;
+    }
+    #note-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #e8e8f0;
+      font-size: 14px;
+      padding: 10px 0;
+      font-family: inherit;
+      min-width: 0;
+    }
+    #note-input::placeholder { color: var(--muted); }
+
+    /* ── Bottom: numpad + submit ── */
+    #bottom-area {
+      flex-shrink: 0;
+      padding: 6px 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    #numpad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+    }
+    .num-btn {
+      background: #16161e;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: var(--rsm);
+      color: #e8e8f0;
+      font-size: 22px;
+      font-weight: 500;
+      height: 54px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.1s, transform 0.1s;
+    }
+    .num-btn:active { background: rgba(255,255,255,0.16); transform: scale(0.94); }
+    .num-btn.del-btn { font-size: 18px; color: var(--muted); }
+    .num-btn.dot-btn { font-size: 28px; }
+
+    #submit-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: var(--r);
+      background: var(--mode);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    #submit-btn:active { transform: scale(0.98); opacity: 0.85; }
+    #submit-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+
+    /* ── Compact on short windows ── */
+    @media (max-height: 650px) {
+      .num-btn { height: 46px; font-size: 20px; }
+      #numpad { gap: 5px; }
+      #bottom-area { gap: 5px; padding-bottom: 8px; }
+      #submit-btn { padding: 11px; font-size: 15px; }
+      #amount-display { min-height: 44px; font-size: 36px; }
+      #scroll-area { gap: 7px; }
+    }
+    @media (max-height: 520px) {
+      .num-btn { height: 38px; font-size: 18px; }
+      .slabel { display: none; }
+      #note-wrap { display: none; }
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%) translateY(14px);
+      background: #1e1e2e;
+      border: 1px solid rgba(255,255,255,0.12);
+      color: #e8e8f0;
+      padding: 9px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      opacity: 0;
+      transition: opacity 0.25s, transform 0.25s;
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 100;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Modals ── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.60);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s;
+    }
+    .modal-overlay.open { opacity: 1; pointer-events: all; }
+    .modal-sheet {
+      background: #1a1a26;
+      border-radius: 22px 22px 0 0;
+      padding: 16px 20px 40px;
+      width: 100%;
+      max-width: 480px;
+      transform: translateY(100%);
+      transition: transform 0.28s cubic-bezier(0.32,0.72,0,1);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .modal-overlay.open .modal-sheet { transform: translateY(0); }
+    .modal-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 0 auto 2px; }
+    .modal-title  { font-size: 16px; font-weight: 700; text-align: center; color: #e8e8f0; }
+    .modal-input  {
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: var(--rsm);
+      color: #e8e8f0;
+      font-size: 16px;
+      padding: 12px 16px;
+      outline: none;
+      font-family: inherit;
+    }
+    .modal-input:focus { border-color: var(--mode); }
+    .modal-btn {
+      padding: 13px; border: none; border-radius: var(--rsm);
+      background: var(--mode); color: #fff;
+      font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit;
+    }
+    .modal-cancel {
+      padding: 8px; border: none; background: transparent;
+      color: var(--muted); font-size: 14px; cursor: pointer; font-family: inherit;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <div id="top-bar">
+    <div id="mode-tabs">
+      <button class="mode-btn active" data-mode="expense" onclick="setMode('expense')">💸 Расход</button>
+      <button class="mode-btn"        data-mode="income"  onclick="setMode('income')">💰 Доход</button>
+      <button class="mode-btn"        data-mode="asset"   onclick="setMode('asset')">📦 Актив</button>
+    </div>
+  </div>
+
+  <div id="scroll-area">
+
+    <div id="amount-card">
+      <div id="amount-label">СУММА</div>
+      <div id="amount-display" class="placeholder">0</div>
+      <div id="currency-badge">выберите валюту</div>
+    </div>
+
+    <div class="slabel">Валюта</div>
+    <div id="currency-scroll"></div>
+
+    <div class="slabel">Категория</div>
+    <div id="category-grid"></div>
+
+    <div class="slabel">Заметка</div>
+    <div id="note-wrap">
+      <span style="font-size:15px;flex-shrink:0;line-height:1">📝</span>
+      <input id="note-input" type="text" maxlength="120"
+             placeholder="Необязательно..."
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+    </div>
+
+  </div>
+
+  <div id="bottom-area">
+    <div id="numpad">
+      <button class="num-btn" onclick="numPress('7')">7</button>
+      <button class="num-btn" onclick="numPress('8')">8</button>
+      <button class="num-btn" onclick="numPress('9')">9</button>
+      <button class="num-btn" onclick="numPress('4')">4</button>
+      <button class="num-btn" onclick="numPress('5')">5</button>
+      <button class="num-btn" onclick="numPress('6')">6</button>
+      <button class="num-btn" onclick="numPress('1')">1</button>
+      <button class="num-btn" onclick="numPress('2')">2</button>
+      <button class="num-btn" onclick="numPress('3')">3</button>
+      <button class="num-btn dot-btn" onclick="numPress('.')">·</button>
+      <button class="num-btn" onclick="numPress('0')">0</button>
+      <button class="num-btn del-btn" onclick="numBackspace()">⌫</button>
+    </div>
+    <button id="submit-btn" disabled onclick="submit()">Заполните все поля</button>
+  </div>
+
+</div>
+
+<!-- Currency modal -->
+<div class="modal-overlay" id="add-cur-modal" onclick="if(event.target===this)closeModal('cur')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Добавить валюту</div>
+    <input class="modal-input" id="cur-input" type="text" maxlength="10"
+           placeholder="BTC, GBP, USDT…" autocomplete="off"
+           oninput="this.value=this.value.toUpperCase()" />
+    <button class="modal-btn"    onclick="confirmCurrency()">Добавить</button>
+    <button class="modal-cancel" onclick="closeModal('cur')">Отмена</button>
+  </div>
+</div>
+
+<!-- Category modal -->
+<div class="modal-overlay" id="add-cat-modal" onclick="if(event.target===this)closeModal('cat')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Добавить категорию</div>
+    <input class="modal-input" id="cat-input" type="text" maxlength="30"
+           placeholder="Например: Спорт, Кофе…" autocomplete="off" />
+    <button class="modal-btn"    onclick="confirmCategory()">Добавить</button>
+    <button class="modal-cancel" onclick="closeModal('cat')">Отмена</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── Data ──
+var CURRENCIES = ['USD','USDT','RUB','EUR','VND'];
+var EXTRA_CUR  = [];
+
+var CATEGORIES = {
+  expense: ['Еда','Транспорт','Жильё','Коммуналка','Одежда','Медицина','Подписки','Подарки','Путешествия','Развлечения','Образование','Другое'],
+  income:  ['Зарплата','Премия','Фриланс','Кэшбэк','Проценты','Дивиденды','Возврат налога','Подарок','Аренда','Перевод','Продажа вещи','Другое'],
+  asset:   ['Крипта','Акции','Облигации','Фонд','Вклад','Недвижимость','Золото','Серебро','Кэш','Другое'],
+};
+var EXTRA_CAT = { expense:[], income:[], asset:[] };
+
+// Перемещает элемент val в начало массива arr (мутирует на месте)
+function pushFront(arr, val) {
+  var i = arr.indexOf(val);
+  if (i > 0) { arr.splice(i, 1); arr.unshift(val); }
+  else if (i === -1) { arr.unshift(val); }
+}
+
+var MODE_COLOR = { expense:'#f04f6a', income:'#34d399', asset:'#818cf8' };
+var MODE_GLOW  = { expense:'rgba(240,79,106,0.18)', income:'rgba(52,211,153,0.14)', asset:'rgba(129,140,248,0.18)' };
+
+var state = { mode:'expense', amountStr:'', currency:null, category:null };
+
+// ── Telegram init ──
+var tg = window.Telegram && window.Telegram.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+  // Fix keyboard on mobile: resize app to stable viewport height
+  tg.onEvent('viewportChanged', function() {
+    if (tg.viewportStableHeight) {
+      document.getElementById('app').style.height = tg.viewportStableHeight + 'px';
+    }
+  });
+}
+
+// ── Note input: hide numpad when keyboard is open on mobile ──
+var noteInput = document.getElementById('note-input');
+var bottomArea = document.getElementById('bottom-area');
+noteInput.addEventListener('focus', function() {
+  bottomArea.style.display = 'none';
+  setTimeout(function() { noteInput.scrollIntoView({ behavior:'smooth', block:'center' }); }, 150);
+});
+noteInput.addEventListener('blur', function() {
+  bottomArea.style.display = '';
+});
+noteInput.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' || e.keyCode === 13) {
+    e.preventDefault();
+    noteInput.blur();
+  }
+});
+
+// ── Mode ──
+function setMode(mode) {
+  state.mode = mode;
+  state.category = null;
+
+  document.querySelectorAll('.mode-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+
+  var color = MODE_COLOR[mode];
+  var glow  = MODE_GLOW[mode];
+  document.documentElement.style.setProperty('--mode', color);
+  document.documentElement.style.setProperty('--glow',  glow);
+
+  renderCategories();
+  renderAmount();
+  updateSubmitBtn();
+}
+
+// ── Numpad ──
+function numPress(d) {
+  if (d === '.' && state.amountStr.indexOf('.') !== -1) { toast('Точка уже есть'); return; }
+  if (state.amountStr.length >= 14) { toast('Слишком длинное'); return; }
+  if (d !== '.' && state.amountStr === '0') state.amountStr = d;
+  else state.amountStr += d;
+  renderAmount();
+  updateSubmitBtn();
+}
+function numBackspace() {
+  if (!state.amountStr) return;
+  state.amountStr = state.amountStr.slice(0,-1);
+  renderAmount();
+  updateSubmitBtn();
+}
+function renderAmount() {
+  var el  = document.getElementById('amount-display');
+  var raw = state.amountStr;
+  if (!raw) { el.textContent = '0'; el.className = 'placeholder'; return; }
+  var p = raw.split('.');
+  var fmt = p[0].replace(/\B(?=(\d{3})+(?!\d))/g, '\u2009');
+  el.textContent = p.length > 1 ? fmt + '.' + p[1] : fmt;
+  el.className = 'has-value';
+}
+
+// ── Currency ──
+function renderCurrencies() {
+  var all  = CURRENCIES.concat(EXTRA_CUR);
+  var wrap = document.getElementById('currency-scroll');
+  wrap.innerHTML = '';
+  all.forEach(function(c) {
+    var btn = document.createElement('button');
+    btn.className = 'chip' + (state.currency === c ? ' selected' : '');
+    btn.textContent = c;
+    btn.onclick = function() { selectCurrency(c); };
+    wrap.appendChild(btn);
+  });
+  var add = document.createElement('button');
+  add.className = 'chip add-chip';
+  add.textContent = '+';
+  add.onclick = function() { openModal('cur'); };
+  wrap.appendChild(add);
+}
+function selectCurrency(c) {
+  state.currency = c;
+  if (CURRENCIES.indexOf(c) !== -1) pushFront(CURRENCIES, c);
+  else pushFront(EXTRA_CUR, c);
+  renderCurrencies();
+  var b = document.getElementById('currency-badge');
+  b.textContent = c; b.className = 'selected';
+  updateSubmitBtn();
+}
+
+// ── Categories ──
+function renderCategories() {
+  var grid = document.getElementById('category-grid');
+  grid.innerHTML = '';
+  var cats = CATEGORIES[state.mode].concat(EXTRA_CAT[state.mode]);
+  cats.forEach(function(cat) {
+    var btn = document.createElement('button');
+    btn.className = 'cat-btn' + (state.category === cat ? ' selected' : '');
+    btn.textContent = cat;
+    btn.onclick = function() { selectCategory(cat); };
+    grid.appendChild(btn);
+  });
+  var add = document.createElement('button');
+  add.className = 'cat-btn';
+  add.textContent = '+';
+  add.style.color = 'var(--muted)';
+  add.style.fontSize = '18px';
+  add.onclick = function() { openModal('cat'); };
+  grid.appendChild(add);
+}
+function selectCategory(cat) {
+  if (state.category === cat) { state.category = null; renderCategories(); updateSubmitBtn(); return; }
+  state.category = cat;
+  // Двигаем в начало нужного массива
+  if (CATEGORIES[state.mode].indexOf(cat) !== -1) pushFront(CATEGORIES[state.mode], cat);
+  else pushFront(EXTRA_CAT[state.mode], cat);
+  renderCategories();
+  updateSubmitBtn();
+}
+
+// ── Submit ──
+function updateSubmitBtn() {
+  var btn = document.getElementById('submit-btn');
+  var ok  = state.amountStr && parseFloat(state.amountStr) > 0 && state.currency && state.category;
+  btn.disabled = !ok;
+  var lbl = { expense:'Сохранить расход', income:'Сохранить доход', asset:'Сохранить актив' };
+  btn.textContent = ok ? lbl[state.mode] : 'Заполните все поля';
+}
+function submit() {
+  var note    = document.getElementById('note-input').value.trim();
+  var payload = JSON.stringify({ mode:state.mode, amount:state.amountStr, currency:state.currency, category:state.category, note:note||null });
+  if (tg) { tg.sendData(payload); }
+  else { console.log(payload); toast('OK: ' + state.amountStr + ' ' + state.currency); }
+}
+
+// ── Modals ──
+function openModal(type) {
+  document.getElementById('add-' + type + '-modal').classList.add('open');
+  var inp = document.getElementById(type + '-input');
+  setTimeout(function() { inp.focus(); }, 300);
+}
+function closeModal(type) {
+  document.getElementById('add-' + type + '-modal').classList.remove('open');
+  document.getElementById(type + '-input').value = '';
+}
+function confirmCurrency() {
+  var val = document.getElementById('cur-input').value.trim().toUpperCase();
+  if (!val) { toast('Введите код валюты'); return; }
+  if (CURRENCIES.concat(EXTRA_CUR).indexOf(val) === -1) EXTRA_CUR.push(val);
+  renderCurrencies();
+  selectCurrency(val);
+  closeModal('cur');
+}
+function confirmCategory() {
+  var val = document.getElementById('cat-input').value.trim();
+  if (!val) { toast('Введите название'); return; }
+  var all = CATEGORIES[state.mode].concat(EXTRA_CAT[state.mode]);
+  if (all.indexOf(val) === -1) EXTRA_CAT[state.mode].push(val);
+  state.category = val;
+  renderCategories();
+  updateSubmitBtn();
+  closeModal('cat');
+}
+
+// ── Toast ──
+var toastTimer;
+function toast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { el.classList.remove('show'); }, 2200);
+}
+
+// ── Init ──
+setMode('expense');
+renderCurrencies();
+renderAmount();
+updateSubmitBtn();
+</script>
+</body>
+</html>
