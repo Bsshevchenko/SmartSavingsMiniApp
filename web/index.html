@@ -452,7 +452,7 @@
 <div id="toast"></div>
 
 <script>
-// ── Data ──
+// ── Data (defaults — заменяются данными из БД) ──
 var CURRENCIES = ['USD','USDT','RUB','EUR','VND'];
 var EXTRA_CUR  = [];
 
@@ -462,6 +462,30 @@ var CATEGORIES = {
   asset:   ['Крипта','Акции','Облигации','Фонд','Вклад','Недвижимость','Золото','Серебро','Кэш','Другое'],
 };
 var EXTRA_CAT = { expense:[], income:[], asset:[] };
+
+function loadUserData(userId) {
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api/user-data?user_id=' + userId, true);
+  xhr.onload = function() {
+    if (xhr.status !== 200) return;
+    try {
+      var data = JSON.parse(xhr.responseText);
+      if (data.currencies && data.currencies.length > 0) {
+        CURRENCIES = data.currencies;
+        EXTRA_CUR  = [];
+      }
+      if (data.categories) {
+        if (data.categories.expense && data.categories.expense.length > 0) CATEGORIES.expense = data.categories.expense;
+        if (data.categories.income  && data.categories.income.length  > 0) CATEGORIES.income  = data.categories.income;
+        if (data.categories.asset   && data.categories.asset.length   > 0) CATEGORIES.asset   = data.categories.asset;
+        EXTRA_CAT = { expense:[], income:[], asset:[] };
+      }
+      renderCurrencies();
+      renderCategories();
+    } catch(e) {}
+  };
+  xhr.send();
+}
 
 // Перемещает элемент val в начало массива arr (мутирует на месте)
 function pushFront(arr, val) {
@@ -667,6 +691,15 @@ setMode('expense');
 renderCurrencies();
 renderAmount();
 updateSubmitBtn();
+
+// Загружаем данные из БД по Telegram user_id
+var tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+if (tgUser && tgUser.id) {
+  loadUserData(tgUser.id);
+} else {
+  // Dev-режим: используем первого пользователя из БД для тестирования
+  loadUserData(614688432);
+}
 </script>
 </body>
 </html>
