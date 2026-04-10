@@ -1,0 +1,28 @@
+services:
+  server:
+    build: .
+    command: uvicorn server:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+
+  bot:
+    build: .
+    command: python bot.py
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - server
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
+    command: http server:8000 --domain=riding-recycling-purveyor.ngrok-free.dev
+    env_file: .env
+    depends_on:
+      - server
