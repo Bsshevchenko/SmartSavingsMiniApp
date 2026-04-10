@@ -22,7 +22,7 @@ services:
   ngrok:
     image: ngrok/ngrok:latest
     restart: unless-stopped
-    command: http server:8000 --domain=riding-recycling-purveyor.ngrok-free.dev
+    command: http server:8000 --url=riding-recycling-purveyor.ngrok-free.dev
     env_file: .env
     depends_on:
       - server
