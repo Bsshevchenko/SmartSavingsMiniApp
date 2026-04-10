@@ -28,7 +28,7 @@ _SSL_CTX.verify_mode = ssl.CERT_NONE
 
 DB_PATH = Path(__file__).parent / "data" / "app.db"
 
-FIAT_CODES = ["RUB", "VND", "THB", "MYR", "EUR"]
+FIAT_CODES = ["RUB", "VND", "CNY", "HKD", "THB", "MYR", "EUR"]
 
 COINGECKO_IDS = {
     "BTC":  "bitcoin",
