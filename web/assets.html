@@ -296,6 +296,58 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .hidden { display: none !important; }
+
+  /* ── Категории-группы в позициях ── */
+  .cat-group { margin-bottom: 8px; }
+  .cat-group-header {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: border-radius .2s;
+  }
+  .cat-group-header.open { border-radius: 12px 12px 0 0; }
+  .cat-group-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px;
+    flex-shrink: 0;
+  }
+  .cat-group-info { flex: 1; min-width: 0; }
+  .cat-group-name { font-size: 15px; font-weight: 700; }
+  .cat-group-count { font-size: 12px; color: var(--sub); margin-top: 1px; }
+  .cat-group-right { text-align: right; flex-shrink: 0; }
+  .cat-group-value { font-size: 15px; font-weight: 700; }
+  .cat-group-pct { font-size: 12px; color: var(--sub); margin-top: 1px; }
+  .cat-group-chevron {
+    color: var(--sub); font-size: 11px; flex-shrink: 0;
+    transition: transform .2s;
+  }
+  .cat-group-header.open .cat-group-chevron { transform: rotate(180deg); }
+  .cat-group-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height .35s ease;
+    background: var(--card);
+    border-radius: 0 0 12px 12px;
+  }
+  .cat-group-body.open { max-height: 3000px; }
+  .cat-group-body .pos-wrap { border-top: 1px solid var(--border); margin-left: 16px; }
+  .cat-group-body .pos-card {
+    background: transparent; border-radius: 0;
+    padding: 10px 14px;
+    font-size: 0.93em;
+  }
+  .cat-group-body .pos-card .pos-ticker { font-size: 14px; }
+  .cat-group-body .pos-card .pos-value { font-size: 14px; }
+  .cat-group-body .pos-card .pos-icon { width: 34px; height: 34px; font-size: 11px; }
+  .cat-group-body .pos-card.expanded { border-radius: 0; }
+  .cat-group-body .pos-chart-inner { border-radius: 0; margin-top: 0; }
 </style>
 </head>
 <body>
@@ -410,6 +462,7 @@
   <a href="/analytics" class="nav-item"><span class="icon">📊</span><span>Аналитика</span></a>
   <a href="/assets" class="nav-item active"><span class="icon">🏦</span><span>Активы</span></a>
   <a href="/history" class="nav-item"><span class="icon">🕐</span><span>История</span></a>
+  <a href="/fin-model" class="nav-item"><span class="icon">📋</span><span>Модель</span></a>
 </nav>
 
 <script>
@@ -588,65 +641,119 @@ function render(data) {
       </div>`;
   });
 
-  // Positions
+  // Positions — grouped by category
   const posEl = document.getElementById('positions-list');
   posEl.innerHTML = '';
-  positions.forEach((p, i) => {
-    const colorIdx = by_category.findIndex(c => c.name === p.category);
-    const color = CAT_COLORS[(colorIdx >= 0 ? colorIdx : i) % CAT_COLORS.length];
-    const icon = CAT_ICONS[p.category] || p.ticker.slice(0, 2);
 
-    const wrap = document.createElement('div');
-    wrap.className = 'pos-wrap';
+  // Build lookup: category name → positions[]
+  const grouped = {};
+  by_category.forEach(cat => { grouped[cat.name] = []; });
+  positions.forEach(p => {
+    if (!grouped[p.category]) grouped[p.category] = [];
+    grouped[p.category].push(p);
+  });
 
-    const card = document.createElement('div');
-    card.className = 'pos-card';
-    card.innerHTML = `
-      <div class="pos-icon" style="background:${color}22;color:${color}">${icon}</div>
-      <div class="pos-body">
-        <div class="pos-ticker">${p.ticker}</div>
-        <div class="pos-cat">${p.category}</div>
-        <div class="pos-bar-wrap">
-          <div class="pos-bar" style="width:${p.pct}%;background:${color}"></div>
+  function pluralPos(n) {
+    if (n === 1) return 'позиция';
+    if (n >= 2 && n <= 4) return 'позиции';
+    return 'позиций';
+  }
+
+  by_category.forEach((cat, catIdx) => {
+    const catPositions = grouped[cat.name] || [];
+    if (catPositions.length === 0) return;
+
+    const color = CAT_COLORS[catIdx % CAT_COLORS.length];
+    const catIcon = CAT_ICONS[cat.name] || cat.name.slice(0, 2).toUpperCase();
+
+    const group = document.createElement('div');
+    group.className = 'cat-group';
+
+    const header = document.createElement('div');
+    header.className = 'cat-group-header';
+    header.innerHTML = `
+      <div class="cat-group-icon" style="background:${color}22;color:${color}">${catIcon}</div>
+      <div class="cat-group-info">
+        <div class="cat-group-name">${cat.name}</div>
+        <div class="cat-group-count">${catPositions.length} ${pluralPos(catPositions.length)}</div>
+      </div>
+      <div class="cat-group-right">
+        <div class="cat-group-value">${fmt(cat.value, cur)}</div>
+        <div class="cat-group-pct">${cat.pct}%</div>
+      </div>
+      <div class="cat-group-chevron">▼</div>`;
+
+    const body = document.createElement('div');
+    body.className = 'cat-group-body';
+    body.style.borderLeft = `3px solid ${color}70`;
+
+    catPositions.forEach(p => {
+      const tickerIcon = p.realty_id ? 'RE' : p.ticker.slice(0, 3);
+      const qtyLabel = p.realty_id ? `${p.qty} м²` : `${fmtQty(p.qty)} шт.`;
+      const actionsHTML = p.realty_id ? '' : `
+        <div class="pos-actions">
+          <button class="pos-action-btn btn-edit" title="Изменить">✏️</button>
+          <button class="pos-action-btn btn-delete" title="Закрыть">🗑️</button>
+        </div>`;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'pos-wrap';
+
+      const card = document.createElement('div');
+      card.className = 'pos-card';
+      card.innerHTML = `
+        <div class="pos-icon" style="background:${color}22;color:${color}">${tickerIcon}</div>
+        <div class="pos-body">
+          <div class="pos-ticker">${p.ticker}</div>
+          <div class="pos-bar-wrap">
+            <div class="pos-bar" style="width:${p.pct}%;background:${color}"></div>
+          </div>
         </div>
-      </div>
-      <div class="pos-right">
-        <div class="pos-value">${fmt(p.value, cur)}</div>
-        <div class="pos-pct">${p.pct}%</div>
-        <div class="pos-qty">${fmtQty(p.qty)} шт.</div>
-      </div>
-      <div class="pos-actions">
-        <button class="pos-action-btn btn-edit" title="Изменить">✏️</button>
-        <button class="pos-action-btn btn-delete" title="Закрыть">🗑️</button>
+        <div class="pos-right">
+          <div class="pos-value">${fmt(p.value, cur)}</div>
+          <div class="pos-pct">${p.pct}%</div>
+          <div class="pos-qty">${qtyLabel}</div>
+        </div>
+        ${actionsHTML}`;
+
+      const chartArea = document.createElement('div');
+      chartArea.className = 'pos-chart-area';
+      chartArea.innerHTML = `<div class="pos-chart-inner">
+        <div class="pos-chart-loading">Загрузка...</div>
+        <canvas style="display:none"></canvas>
       </div>`;
 
-    const chartArea = document.createElement('div');
-    chartArea.className = 'pos-chart-area';
-    chartArea.innerHTML = `<div class="pos-chart-inner">
-      <div class="pos-chart-loading">Загрузка...</div>
-      <canvas style="display:none"></canvas>
-    </div>`;
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.pos-actions')) return;
+        const isOpen = chartArea.classList.contains('open');
+        if (isOpen) {
+          chartArea.classList.remove('open');
+          card.classList.remove('expanded');
+        } else {
+          chartArea.classList.add('open');
+          card.classList.add('expanded');
+          loadPosChart(p, color, chartArea, cur);
+        }
+      });
 
-    // Toggle при клике на карточку (не на кнопки действий)
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.pos-actions')) return;
-      const isOpen = chartArea.classList.contains('open');
-      if (isOpen) {
-        chartArea.classList.remove('open');
-        card.classList.remove('expanded');
-      } else {
-        chartArea.classList.add('open');
-        card.classList.add('expanded');
-        loadPosChart(p, color, chartArea, cur);
+      if (!p.realty_id) {
+        card.querySelector('.btn-edit').addEventListener('click', () => openEdit(p));
+        card.querySelector('.btn-delete').addEventListener('click', () => openDelete(p));
       }
+
+      wrap.appendChild(card);
+      wrap.appendChild(chartArea);
+      body.appendChild(wrap);
     });
 
-    card.querySelector('.btn-edit').addEventListener('click', () => openEdit(p));
-    card.querySelector('.btn-delete').addEventListener('click', () => openDelete(p));
+    header.addEventListener('click', () => {
+      header.classList.toggle('open');
+      body.classList.toggle('open');
+    });
 
-    wrap.appendChild(card);
-    wrap.appendChild(chartArea);
-    posEl.appendChild(wrap);
+    group.appendChild(header);
+    group.appendChild(body);
+    posEl.appendChild(group);
   });
 }
 
@@ -657,11 +764,14 @@ async function loadPosChart(pos, color, chartArea, cur) {
   const canvas = chartArea.querySelector('canvas');
   const loading = chartArea.querySelector('.pos-chart-loading');
 
-  // Уже загружен
-  if (_chartInstances[pos.ticker]) return;
+  const cacheKey = pos.realty_id ? `realty_${pos.realty_id}` : pos.ticker;
+  if (_chartInstances[cacheKey]) return;
 
   try {
-    const res = await fetch(`/api/asset-history?user_id=${userId}&ticker=${encodeURIComponent(pos.ticker)}&currency=${currency}`);
+    const url = pos.realty_id
+      ? `/api/realty-history?user_id=${userId}&realty_id=${pos.realty_id}&currency=${currency}`
+      : `/api/asset-history?user_id=${userId}&ticker=${encodeURIComponent(pos.ticker)}&currency=${currency}`;
+    const res = await fetch(url);
     const data = await res.json();
     const pts = data.points;
 
@@ -679,7 +789,7 @@ async function loadPosChart(pos, color, chartArea, cur) {
     const pointBorderColors = pts.map(p => p.is_current ? color : p.is_snapshot ? '#f59e0b' : color);
     const pointBorderWidths = pts.map(p => (p.is_current || p.is_snapshot) ? 2 : 0);
 
-    _chartInstances[pos.ticker] = new Chart(ctx, {
+    _chartInstances[cacheKey] = new Chart(ctx, {
       type: 'line',
       data: {
         labels: pts.map(p => p.is_current ? 'Сейчас' : p.label),
