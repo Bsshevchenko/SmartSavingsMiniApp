@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Финансовая модель</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f0f13;
+    --card: #1a1a22;
+    --card2: #22222e;
+    --border: #2e2e3e;
+    --accent: #7c6af7;
+    --accent2: #5eead4;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+    --text: #e2e2f0;
+    --sub: #8888aa;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    padding-bottom: 84px;
+  }
+
+  /* ── Шапка ── */
+  .header {
+    padding: 20px 16px 12px;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; }
+  .header .sub { font-size: 13px; color: var(--sub); margin-top: 2px; }
+
+  /* ── Секция ── */
+  .section { padding: 0 16px 14px; }
+  .section-title {
+    font-size: 12px; font-weight: 600;
+    color: var(--sub); text-transform: uppercase;
+    letter-spacing: .6px; margin-bottom: 10px;
+  }
+
+  /* ── GCR Hero Card ── */
+  .gcr-hero {
+    margin: 0 16px 14px;
+    background: linear-gradient(135deg, #1e1a38 0%, #1a2230 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .gcr-hero-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .gcr-left {}
+  .gcr-value {
+    font-size: 52px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -1px;
+  }
+  .gcr-value.red    { color: var(--red); }
+  .gcr-value.orange { color: var(--orange); }
+  .gcr-value.yellow { color: var(--yellow); }
+  .gcr-value.green  { color: var(--green); }
+  .gcr-label { font-size: 12px; color: var(--sub); margin-top: 4px; letter-spacing: .3px; }
+  .gcr-right {
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .gcr-stat-label { font-size: 11px; color: var(--sub); margin-bottom: 2px; }
+  .gcr-stat-value { font-size: 16px; font-weight: 700; }
+  .gcr-stat-value.passive { color: var(--accent2); }
+  .gcr-stat-value.expense { color: var(--red); }
+  .gcr-stat-sep { font-size: 11px; color: var(--sub); margin: 8px 0 2px; }
+
+  .gcr-progress-wrap {
+    height: 10px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 5px;
+    margin-top: 16px;
+    overflow: hidden;
+  }
+  .gcr-progress-bar {
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .8s ease;
+  }
+  .gcr-footer {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--sub);
+  }
+  .gcr-footer span { color: var(--text); font-weight: 600; }
+
+  /* ── Quick metrics grid ── */
+  .quick-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    padding: 0 16px 14px;
+  }
+  .quick-card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 12px 10px;
+  }
+  .quick-card .qc-icon { font-size: 18px; margin-bottom: 4px; }
+  .quick-card .qc-label { font-size: 10px; color: var(--sub); letter-spacing: .3px; }
+  .quick-card .qc-value { font-size: 14px; font-weight: 700; margin-top: 2px; }
+  .quick-card .qc-value.green  { color: var(--green); }
+  .quick-card .qc-value.orange { color: var(--orange); }
+  .quick-card .qc-value.red    { color: var(--red); }
+  .quick-card .qc-value.accent2 { color: var(--accent2); }
+
+  /* ── Дорожная карта ── */
+  .roadmap { display: flex; flex-direction: column; gap: 8px; }
+  .phase-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+    border-left: 3px solid var(--border);
+    opacity: 0.55;
+    transition: opacity .2s;
+  }
+  .phase-card.active {
+    opacity: 1;
+    border-left-color: var(--accent);
+  }
+  .phase-card.done {
+    opacity: 1;
+    border-left-color: var(--green);
+  }
+  .phase-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .phase-badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .5px; padding: 3px 8px; border-radius: 6px;
+    background: rgba(124,106,247,0.15); color: var(--accent);
+  }
+  .phase-card.active .phase-badge { background: rgba(124,106,247,0.2); color: var(--accent); }
+  .phase-card:not(.active):not(.done) .phase-badge { background: rgba(136,136,170,0.12); color: var(--sub); }
+  .phase-name { font-size: 14px; font-weight: 600; }
+  .phase-details { font-size: 13px; color: var(--sub); line-height: 1.5; }
+  .phase-details b { color: var(--text); }
+  .phase-progress-wrap {
+    height: 6px; background: var(--border); border-radius: 3px;
+    margin-top: 10px; overflow: hidden;
+  }
+  .phase-progress-bar {
+    height: 6px; border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .6s ease;
+  }
+
+  /* pulse dot */
+  .pulse-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    animation: pulse-anim 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse-anim {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.7); }
+  }
+
+  /* ── Настройки (details) ── */
+  details {
+    background: var(--card);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  details summary {
+    padding: 14px 16px;
+    cursor: pointer;
+    font-size: 14px; font-weight: 600;
+    user-select: none;
+    list-style: none;
+    display: flex; align-items: center; gap: 8px;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after {
+    content: "▾";
+    margin-left: auto;
+    color: var(--sub);
+    transition: transform .2s;
+  }
+  details[open] summary::after { transform: rotate(180deg); }
+  .settings-body {
+    padding: 0 16px 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .settings-body .field-full { grid-column: 1 / -1; }
+  .field label {
+    display: block; font-size: 11px; color: var(--sub); margin-bottom: 4px;
+  }
+  .field input {
+    width: 100%;
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 14px;
+    padding: 9px 10px;
+    outline: none;
+  }
+  .field input:focus { border-color: var(--accent); }
+  .btn-recalc {
+    width: 100%;
+    padding: 12px;
+    background: var(--accent);
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+    margin-top: 4px;
+  }
+  .btn-recalc:active { opacity: .75; }
+
+  /* ── Графики ── */
+  .chart-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .chart-card canvas { max-height: 220px; }
+  .chart-card.compact canvas { max-height: 180px; }
+  .chart-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+  .legend-row {
+    display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--sub);
+  }
+  .legend-dot { width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+
+  /* ── Калькулятор аренды ── */
+  .rental-cascade {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .cascade-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+  .cascade-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .cascade-step {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .cascade-step:last-child { border-bottom: none; }
+  .cs-label { flex: 1; font-size: 13px; color: var(--sub); }
+  .cs-arrow { font-size: 14px; color: var(--border); margin: 0 8px; flex-shrink: 0; }
+  .cs-value { font-size: 14px; font-weight: 700; min-width: 90px; text-align: right; }
+  .cs-value.final { color: var(--accent2); font-size: 16px; }
+  .cascade-gcr {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--sub);
+    text-align: center;
+  }
+  .cascade-gcr span { color: var(--accent); font-weight: 700; font-size: 15px; }
+
+  /* ── Стресс-тесты ── */
+  .stress-table { width: 100%; border-collapse: collapse; }
+  .stress-table th {
+    font-size: 10px; color: var(--sub);
+    text-transform: uppercase; letter-spacing: .4px;
+    text-align: left; padding: 0 8px 8px 0;
+  }
+  .stress-table th:last-child { text-align: center; }
+  .stress-table td {
+    font-size: 13px; padding: 8px 8px 8px 0;
+    border-top: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .stress-table td:last-child { text-align: center; }
+  .stress-row.ok   td { background: rgba(74,222,128,0.04); }
+  .stress-row.warn td { background: rgba(251,191,36,0.05); }
+  .stress-row.danger td { background: rgba(248,113,113,0.05); }
+  .stress-row td:first-child { border-radius: 8px 0 0 8px; }
+  .stress-row td:last-child  { border-radius: 0 8px 8px 0; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block;
+  }
+  .status-dot.ok     { background: var(--green); }
+  .status-dot.warn   { background: var(--yellow); }
+  .status-dot.danger { background: var(--red); }
+  .stress-note {
+    font-size: 11px; color: var(--sub);
+    margin-top: 8px; text-align: center;
+  }
+  .gcr-td { font-weight: 700; }
+  .gcr-td.ok     { color: var(--green); }
+  .gcr-td.warn   { color: var(--yellow); }
+  .gcr-td.danger { color: var(--red); }
+
+  /* ── Bottom nav ── */
+  .bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    display: flex;
+    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+    z-index: 100;
+  }
+  .nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 3px; text-decoration: none; color: var(--sub);
+    font-size: 10px; font-weight: 500; padding: 4px 0;
+    transition: color .15s;
+  }
+  .nav-item .icon { font-size: 20px; }
+  .nav-item.active { color: var(--accent); }
+
+  /* ── Лоадер ── */
+  .loader {
+    display: flex; align-items: center; justify-content: center;
+    padding: 60px 0; color: var(--sub); font-size: 14px;
+  }
+  .spinner {
+    width: 24px; height: 24px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; margin-right: 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+
+  /* ── Разделитель ── */
+  .divider { height: 1px; background: var(--border); margin: 0 16px 14px; }
+</style>
+</head>
+<body>
+
+<!-- Шапка -->
+<div class="header">
+  <h1>Финансовая модель</h1>
+  <div class="sub">Цель: пассивный доход ≥ расходов (GCR = 100%)</div>
+</div>
+
+<!-- Лоадер -->
+<div class="loader" id="loader"><div class="spinner"></div>Загрузка…</div>
+
+<!-- Основной контент — скрыт до загрузки -->
+<div id="main-content" class="hidden">
+
+  <!-- B. GCR Hero Card -->
+  <div class="gcr-hero">
+    <div class="gcr-hero-top">
+      <div class="gcr-left">
+        <div class="gcr-value" id="gcr-value">—</div>
+        <div class="gcr-label">Goal Coverage Ratio</div>
+      </div>
+      <div class="gcr-right">
+        <div class="gcr-stat-label">Пассивный доход</div>
+        <div class="gcr-stat-value passive" id="gcr-passive">—</div>
+        <div class="gcr-stat-sep">Расходы</div>
+        <div class="gcr-stat-value expense" id="gcr-expenses">—</div>
+      </div>
+    </div>
+    <div class="gcr-progress-wrap">
+      <div class="gcr-progress-bar" id="gcr-progress-bar" style="width:0%"></div>
+    </div>
+    <div class="gcr-footer" id="gcr-footer"></div>
+  </div>
+
+  <!-- C. Быстрые метрики -->
+  <div class="quick-grid">
+    <div class="quick-card">
+      <div class="qc-icon">💧</div>
+      <div class="qc-label">Ликвидность</div>
+      <div class="qc-value" id="qc-liquid">—</div>
+    </div>
+    <div class="quick-card">
+      <div class="qc-icon">🏦</div>
+      <div class="qc-label">Вклад</div>
+      <div class="qc-value accent2" id="qc-deposit">—</div>
+    </div>
+    <div class="quick-card">
+      <div class="qc-icon">📈</div>
+      <div class="qc-label">Пассивный доход</div>
+      <div class="qc-value accent2" id="qc-passive">—</div>
+    </div>
+  </div>
+
+  <!-- D. Дорожная карта -->
+  <div class="section">
+    <div class="section-title">Дорожная карта</div>
+    <div class="roadmap">
+      <!-- Фаза 1 -->
+      <div class="phase-card active" id="phase1-card">
+        <div class="phase-header">
+          <div class="pulse-dot"></div>
+          <div class="phase-badge">Сейчас</div>
+          <div class="phase-name">Накопление на квартиру</div>
+        </div>
+        <div class="phase-details">
+          Цель: <b>10 000 000 ₽</b><br>
+          Прогресс: <b id="phase1-progress">—</b><br>
+          Базовый сценарий: <b id="phase1-base-date">—</b>
+        </div>
+        <div class="phase-progress-wrap">
+          <div class="phase-progress-bar" id="phase1-bar" style="width:0%"></div>
+        </div>
+      </div>
+      <!-- Фаза 2 -->
+      <div class="phase-card" id="phase2-card">
+        <div class="phase-header">
+          <div class="phase-badge">Следующий шаг</div>
+          <div class="phase-name">Покупка квартиры → аренда</div>
+        </div>
+        <div class="phase-details">
+          Прогноз GCR: <b id="phase2-gcr">—</b><br>
+          Аренда нетто: <b id="phase2-rent">—</b>
+        </div>
+      </div>
+      <!-- Фаза 3 -->
+      <div class="phase-card" id="phase3-card">
+        <div class="phase-header">
+          <div class="phase-badge">Цель</div>
+          <div class="phase-name">Финансовая независимость</div>
+        </div>
+        <div class="phase-details">
+          GCR = 100% — расчётный год: <b id="phase3-year">—</b><br>
+          Нужно: <b id="phase3-needed">—</b> пассивного дохода
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- E. Настройки -->
+  <div class="section">
+    <details id="settings-details">
+      <summary>⚙️ Параметры модели</summary>
+      <div class="settings-body">
+        <div class="field">
+          <label>Взнос на вклад, ₽/мес</label>
+          <input type="number" id="inp-saving" value="580200" min="0" step="1000">
+        </div>
+        <div class="field">
+          <label>Стоимость квартиры, ₽</label>
+          <input type="number" id="inp-apartment" value="10000000" min="0" step="100000">
+        </div>
+        <div class="field">
+          <label>Аренда брутто, ₽/мес</label>
+          <input type="number" id="inp-rent" value="65000" min="0" step="1000">
+        </div>
+        <div class="field">
+          <label>Простой, % (доля)</label>
+          <input type="number" id="inp-vacancy" value="15" min="0" max="100" step="1">
+        </div>
+        <div class="field">
+          <label>Управление, %</label>
+          <input type="number" id="inp-mgmt" value="10" min="0" max="100" step="1">
+        </div>
+        <div class="field">
+          <label>Обслуживание, %</label>
+          <input type="number" id="inp-maint" value="5" min="0" max="100" step="1">
+        </div>
+        <div class="field">
+          <label>Налог (НПД), %</label>
+          <input type="number" id="inp-tax" value="4" min="0" max="100" step="1">
+        </div>
+        <div class="field">
+          <label>Взнос в акции, ₽/мес</label>
+          <input type="number" id="inp-stocks" value="22500" min="0" step="500">
+        </div>
+        <div class="field field-full">
+          <button class="btn-recalc" id="btn-recalc">Пересчитать</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- F. График GCR прогноза -->
+  <div class="section">
+    <div class="section-title">Прогноз GCR по годам</div>
+    <div class="chart-card">
+      <canvas id="chart-gcr"></canvas>
+      <div class="legend-row">
+        <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div>GCR %</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--green);border-top:2px dashed var(--green);height:0;margin-top:1px;width:20px"></div>Цель 100%</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--yellow);border-top:2px dashed var(--yellow);height:0;margin-top:1px;width:20px"></div>50%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- G. График накопления -->
+  <div class="section">
+    <div class="section-title">Накопление на квартиру</div>
+    <div class="chart-card compact">
+      <canvas id="chart-deposit"></canvas>
+      <div class="legend-row">
+        <div class="legend-item"><div class="legend-dot" style="background:#e2e2f0"></div>Факт</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div>Оптимистично (20%)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--yellow)"></div>Базово (14%)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div>Консерв. (10%)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- H. Калькулятор аренды -->
+  <div class="section">
+    <div class="section-title">Расчёт чистой аренды</div>
+    <div class="rental-cascade">
+      <div class="cascade-steps">
+        <div class="cascade-step">
+          <div class="cs-label">Брутто</div>
+          <div class="cs-value" id="cs-gross">—</div>
+        </div>
+        <div class="cascade-step">
+          <div class="cs-label">После простоя</div>
+          <div class="cs-arrow">→</div>
+          <div class="cs-value" id="cs-after-vacancy">—</div>
+        </div>
+        <div class="cascade-step">
+          <div class="cs-label">После управления</div>
+          <div class="cs-arrow">→</div>
+          <div class="cs-value" id="cs-after-mgmt">—</div>
+        </div>
+        <div class="cascade-step">
+          <div class="cs-label">После обслуживания</div>
+          <div class="cs-arrow">→</div>
+          <div class="cs-value" id="cs-after-maint">—</div>
+        </div>
+        <div class="cascade-step">
+          <div class="cs-label">После налога (НПД)</div>
+          <div class="cs-arrow">→</div>
+          <div class="cs-value final" id="cs-net">—</div>
+        </div>
+      </div>
+      <div class="cascade-gcr">GCR от аренды: <span id="cascade-gcr-val">—</span></div>
+    </div>
+  </div>
+
+  <!-- I. Стресс-тесты -->
+  <div class="section">
+    <div class="section-title">Стресс-тесты</div>
+    <div class="chart-card" style="padding:14px 16px">
+      <table class="stress-table" id="stress-table">
+        <thead>
+          <tr>
+            <th>Сценарий</th>
+            <th>GCR</th>
+            <th>Доход ₽</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="stress-tbody"></tbody>
+      </table>
+      <div class="stress-note">Стресс-тест показывает GCR после покупки квартиры</div>
+    </div>
+  </div>
+
+</div><!-- /main-content -->
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav">
+  <a href="/" class="nav-item"><span class="icon">💸</span><span>Расходы</span></a>
+  <a href="/analytics" class="nav-item"><span class="icon">📊</span><span>Аналитика</span></a>
+  <a href="/assets" class="nav-item"><span class="icon">🏦</span><span>Активы</span></a>
+  <a href="/history" class="nav-item"><span class="icon">🕐</span><span>История</span></a>
+  <a href="/fin-model" class="nav-item active"><span class="icon">📋</span><span>Модель</span></a>
+</nav>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const userId = tg?.initDataUnsafe?.user?.id || 614688432;
+
+Chart.defaults.color = 'rgba(232,232,240,0.5)';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+function fmt(v) {
+  return new Intl.NumberFormat('ru').format(Math.round(v)) + '\u00a0₽';
+}
+function fmtShort(v) {
+  if (v >= 1e6) return (v / 1e6).toFixed(1).replace('.0', '') + '\u00a0млн\u00a0₽';
+  if (v >= 1e3) return Math.round(v / 1e3) + '\u00a0тыс.\u00a0₽';
+  return Math.round(v) + '\u00a0₽';
+}
+function fmtPct(v) { return (v * 100).toFixed(1) + '%'; }
+
+let chartGcr = null, chartDeposit = null;
+function destroyChart(c) { if (c) { try { c.destroy(); } catch(e) {} } return null; }
+
+function gcrColor(pct) {
+  if (pct >= 75) return 'green';
+  if (pct >= 50) return 'yellow';
+  if (pct >= 25) return 'orange';
+  return 'red';
+}
+
+function render(d) {
+  const cur = d.current;
+  const rental = d.rental;
+  const phase1 = d.phase1;
+
+  // ── B. GCR Hero ──
+  const gcrPct = cur.gcr_pct;
+  const gcrEl = document.getElementById('gcr-value');
+  gcrEl.textContent = gcrPct.toFixed(1) + '%';
+  gcrEl.className = 'gcr-value ' + gcrColor(gcrPct);
+  document.getElementById('gcr-passive').textContent = fmt(cur.passive_income) + '/мес';
+  document.getElementById('gcr-expenses').textContent = fmt(cur.avg_expenses) + '/мес';
+  const barPct = Math.min(100, gcrPct).toFixed(1);
+  document.getElementById('gcr-progress-bar').style.width = barPct + '%';
+  const deficit = Math.max(0, cur.avg_expenses - cur.passive_income);
+  document.getElementById('gcr-footer').innerHTML =
+    deficit > 0
+      ? 'До цели: не хватает <span>' + fmt(deficit) + '/мес</span> пассивного дохода'
+      : '<span>Цель достигнута!</span> Пассивный доход покрывает расходы';
+
+  // ── C. Quick metrics ──
+  const liq = cur.liquid_months;
+  const liqEl = document.getElementById('qc-liquid');
+  liqEl.textContent = liq + '\u00a0мес.';
+  liqEl.className = 'qc-value ' + (liq >= 6 ? 'green' : liq >= 3 ? 'orange' : 'red');
+  document.getElementById('qc-deposit').textContent = fmtShort(cur.deposit_balance);
+  document.getElementById('qc-passive').textContent = fmt(cur.passive_income) + '/мес';
+
+  // ── D. Roadmap ──
+  document.getElementById('phase1-progress').textContent =
+    phase1.progress_pct + '% (' + fmtShort(cur.deposit_balance) + ' / ' + fmtShort(phase1.target) + ')';
+  const baseTarget = phase1.reach_target.base;
+  document.getElementById('phase1-base-date').textContent =
+    baseTarget ? baseTarget.label + '\u00a0(' + baseTarget.months_left + '\u00a0мес.)' : '>4 лет';
+  document.getElementById('phase1-bar').style.width = Math.min(100, phase1.progress_pct) + '%';
+
+  document.getElementById('phase2-gcr').textContent = '~' + rental.gcr_post_purchase_pct + '%';
+  document.getElementById('phase2-rent').textContent = fmt(rental.net) + '/мес';
+
+  const gcr100 = d.gcr_100_year;
+  document.getElementById('phase3-year').textContent = gcr100 ? gcr100 : 'не рассчитан';
+  document.getElementById('phase3-needed').textContent = fmt(cur.avg_expenses) + '/мес';
+
+  // ── E. Settings — уже заполнены дефолтами ──
+
+  // ── F. График GCR ──
+  chartGcr = destroyChart(chartGcr);
+  const gcrLabels = d.gcr_forecast.map(p => p.year.toString());
+  const gcrData   = d.gcr_forecast.map(p => p.gcr_pct);
+  const passiveData = d.gcr_forecast.map(p => p.passive);
+  const purchaseYearIdx = d.gcr_forecast.findIndex(p => p.year >= d.purchase_year);
+
+  chartGcr = new Chart(document.getElementById('chart-gcr').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: gcrLabels,
+      datasets: [
+        {
+          label: 'GCR %',
+          data: gcrData,
+          borderColor: '#7c6af7',
+          backgroundColor: 'rgba(124,106,247,0.1)',
+          borderWidth: 2,
+          pointRadius: 4,
+          pointBackgroundColor: '#7c6af7',
+          fill: true,
+          tension: 0.3,
+        },
+        {
+          label: 'Цель 100%',
+          data: gcrLabels.map(() => 100),
+          borderColor: 'rgba(74,222,128,0.5)',
+          borderWidth: 1,
+          borderDash: [5, 4],
+          pointRadius: 0,
+          fill: false,
+          tension: 0,
+        },
+        {
+          label: '50%',
+          data: gcrLabels.map(() => 50),
+          borderColor: 'rgba(251,191,36,0.4)',
+          borderWidth: 1,
+          borderDash: [3, 4],
+          pointRadius: 0,
+          fill: false,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              if (ctx.datasetIndex === 0) {
+                const idx = ctx.dataIndex;
+                return [
+                  'GCR: ' + ctx.parsed.y.toFixed(1) + '%',
+                  'Пассивный доход: ' + fmt(passiveData[idx]),
+                  'Фаза: ' + d.gcr_forecast[idx].phase,
+                ];
+              }
+              return ctx.dataset.label;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8888aa', font: { size: 10 } },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+        y: {
+          ticks: {
+            color: '#8888aa', font: { size: 10 },
+            callback: v => v + '%',
+          },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          min: 0,
+        },
+      },
+    },
+  });
+
+  // ── G. График накопления ──
+  chartDeposit = destroyChart(chartDeposit);
+  // Собираем все месяцы
+  const allMonthsSet = new Set();
+  const labelMap = {};
+  [...(phase1.optimistic||[]), ...(phase1.base||[]), ...(phase1.conservative||[])].forEach(p => {
+    allMonthsSet.add(p.month);
+    labelMap[p.month] = p.label;
+  });
+  const allMonths = Array.from(allMonthsSet).sort();
+  const depLabels = allMonths.map(m => labelMap[m] || m);
+
+  function buildDs(points) {
+    const mp = {};
+    (points||[]).forEach(p => { mp[p.month] = p.amount; });
+    return allMonths.map(m => mp[m] != null ? mp[m] : null);
+  }
+
+  const targetLine = allMonths.map(() => phase1.target);
+
+  chartDeposit = new Chart(document.getElementById('chart-deposit').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: depLabels,
+      datasets: [
+        {
+          label: 'Оптимистично',
+          data: buildDs(phase1.optimistic),
+          borderColor: '#4ade80',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Базово',
+          data: buildDs(phase1.base),
+          borderColor: '#fbbf24',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Консервативно',
+          data: buildDs(phase1.conservative),
+          borderColor: '#f87171',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Цель ' + fmtShort(phase1.target),
+          data: targetLine,
+          borderColor: 'rgba(136,136,170,0.45)',
+          borderWidth: 1,
+          borderDash: [3, 4],
+          pointRadius: 0,
+          fill: false,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ctx.dataset.label + ': ' + (ctx.parsed.y != null ? fmt(ctx.parsed.y) : '—'),
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8888aa', font: { size: 10 }, maxTicksLimit: 8 },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+        y: {
+          ticks: {
+            color: '#8888aa', font: { size: 10 },
+            callback: v => fmtShort(v),
+          },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+      },
+    },
+  });
+
+  // ── H. Каскад аренды ──
+  const gross = rental.gross;
+  const afterVacancy = Math.round(gross * (1 - rental.vacancy_rate));
+  const afterMgmt    = Math.round(afterVacancy * (1 - rental.mgmt_fee));
+  const afterMaint   = Math.round(afterMgmt * (1 - rental.maintenance));
+  const net          = rental.net;
+  document.getElementById('cs-gross').textContent       = fmt(gross);
+  document.getElementById('cs-after-vacancy').textContent = fmt(afterVacancy);
+  document.getElementById('cs-after-mgmt').textContent    = fmt(afterMgmt);
+  document.getElementById('cs-after-maint').textContent   = fmt(afterMaint);
+  document.getElementById('cs-net').textContent           = fmt(net);
+  document.getElementById('cascade-gcr-val').textContent  = rental.gcr_post_purchase_pct + '%';
+
+  // ── I. Стресс-тесты ──
+  const tbody = document.getElementById('stress-tbody');
+  tbody.innerHTML = '';
+  d.stress_tests.forEach(st => {
+    const cls = st.status === 'ok' ? 'ok' : st.status === 'warning' ? 'warn' : 'danger';
+    const tr = document.createElement('tr');
+    tr.className = 'stress-row ' + cls;
+    tr.innerHTML = `
+      <td>${st.name}</td>
+      <td class="gcr-td ${cls}">${st.gcr_pct}%</td>
+      <td>${fmtShort(st.passive)}</td>
+      <td><span class="status-dot ${cls}"></span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function buildUrl() {
+  const saving   = parseFloat(document.getElementById('inp-saving').value)   || 580200;
+  const apt      = parseFloat(document.getElementById('inp-apartment').value) || 10000000;
+  const rent     = parseFloat(document.getElementById('inp-rent').value)      || 65000;
+  const vacancy  = (parseFloat(document.getElementById('inp-vacancy').value)  || 15) / 100;
+  const mgmt     = (parseFloat(document.getElementById('inp-mgmt').value)     || 10) / 100;
+  const maint    = (parseFloat(document.getElementById('inp-maint').value)    || 5)  / 100;
+  const tax      = (parseFloat(document.getElementById('inp-tax').value)      || 4)  / 100;
+  const stocks   = parseFloat(document.getElementById('inp-stocks').value)    || 22500;
+
+  return `/api/fin-model?user_id=${userId}`
+    + `&monthly_saving=${saving}`
+    + `&apartment_cost=${apt}`
+    + `&rent_gross=${rent}`
+    + `&vacancy_rate=${vacancy}`
+    + `&mgmt_fee=${mgmt}`
+    + `&maintenance=${maint}`
+    + `&tax_rate=${tax}`
+    + `&stock_monthly=${stocks}`;
+}
+
+function load() {
+  document.getElementById('loader').classList.remove('hidden');
+  document.getElementById('main-content').classList.add('hidden');
+
+  fetch(buildUrl())
+    .then(r => r.json())
+    .then(data => {
+      render(data);
+      document.getElementById('loader').classList.add('hidden');
+      document.getElementById('main-content').classList.remove('hidden');
+    })
+    .catch(err => {
+      document.getElementById('loader').innerHTML =
+        '<div style="color:var(--red);padding:20px 0">Ошибка загрузки данных</div>';
+      console.error(err);
+    });
+}
+
+document.getElementById('btn-recalc').addEventListener('click', () => {
+  document.getElementById('settings-details').removeAttribute('open');
+  load();
+});
+
+load();
+</script>
+</body>
+</html>

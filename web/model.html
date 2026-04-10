@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Финансовая модель</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f0f13;
+    --card: #1a1a22;
+    --card2: #22222e;
+    --border: #2e2e3e;
+    --accent: #7c6af7;
+    --accent2: #5eead4;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e2f0;
+    --sub: #8888aa;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding-bottom: 80px;
+  }
+
+  /* ── Шапка ── */
+  .header {
+    padding: 20px 16px 12px;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; }
+  .header .sub { font-size: 13px; color: var(--sub); margin-top: 2px; }
+
+  /* ── Метрики grid 2x2 ── */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 0 16px 14px;
+  }
+  .metric-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
+  .metric-card.full { grid-column: 1 / -1; }
+  .metric-card .m-label {
+    font-size: 11px;
+    color: var(--sub);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .metric-card .m-value {
+    font-size: 20px;
+    font-weight: 700;
+    margin-top: 4px;
+    color: var(--text);
+  }
+  .metric-card .m-value.accent2 { color: var(--accent2); }
+  .metric-card .m-value.accent  { color: var(--accent); }
+  .metric-card .m-value.yellow  { color: var(--yellow); }
+
+  /* Прогресс-бар */
+  .progress-wrap {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .6s ease;
+  }
+
+  /* ── Секции ── */
+  .section { padding: 0 16px 16px; }
+  .section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sub);
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    margin-bottom: 10px;
+  }
+
+  /* ── Сценарии ── */
+  .scenarios-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+  }
+  .scenario-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 12px 10px;
+    text-align: center;
+  }
+  .scenario-card .sc-icon { font-size: 22px; margin-bottom: 6px; }
+  .scenario-card .sc-name { font-size: 11px; color: var(--sub); text-transform: uppercase; letter-spacing: .3px; }
+  .scenario-card .sc-rate { font-size: 12px; color: var(--sub); margin-bottom: 6px; }
+  .scenario-card .sc-date { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+  .scenario-card .sc-left { font-size: 11px; color: var(--sub); }
+  .scenario-card.opt  .sc-date { color: var(--green); }
+  .scenario-card.base .sc-date { color: var(--yellow); }
+  .scenario-card.cons .sc-date { color: var(--red); }
+
+  /* ── Настройки ── */
+  .settings-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .settings-card .field { margin-bottom: 12px; }
+  .settings-card .field:last-of-type { margin-bottom: 0; }
+  .settings-card label {
+    display: block;
+    font-size: 12px;
+    color: var(--sub);
+    margin-bottom: 6px;
+  }
+  .settings-card input {
+    width: 100%;
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 15px;
+    padding: 10px 12px;
+    outline: none;
+  }
+  .settings-card input:focus { border-color: var(--accent); }
+  .btn-recalc {
+    margin-top: 14px;
+    width: 100%;
+    padding: 12px;
+    background: var(--accent);
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+  .btn-recalc:active { opacity: .75; }
+
+  /* ── Графики ── */
+  .chart-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .chart-card canvas { max-height: 260px; }
+  .chart-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+
+  /* ── Инсайты ── */
+  .insights-list { display: flex; flex-direction: column; gap: 8px; }
+  .insight-item {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .insight-item .ins-icon { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+  .insight-item .ins-text { flex: 1; }
+  .insight-item .ins-title { font-size: 13px; color: var(--sub); margin-bottom: 3px; }
+  .insight-item .ins-value { font-size: 16px; font-weight: 700; }
+  .insight-item .ins-value.green  { color: var(--green); }
+  .insight-item .ins-value.yellow { color: var(--yellow); }
+  .insight-item .ins-value.accent2 { color: var(--accent2); }
+
+  /* ── Bottom nav ── */
+  .bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    display: flex;
+    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+    z-index: 100;
+  }
+  .nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 3px; text-decoration: none; color: var(--sub);
+    font-size: 10px; font-weight: 500; padding: 4px 0;
+    transition: color .15s;
+  }
+  .nav-item .icon { font-size: 20px; }
+  .nav-item.active { color: var(--accent); }
+
+  /* ── Лоадер ── */
+  .loader {
+    display: flex; align-items: center; justify-content: center;
+    padding: 60px 0; color: var(--sub); font-size: 14px;
+  }
+  .spinner {
+    width: 24px; height: 24px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; margin-right: 10px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+
+  /* легенда */
+  .legend-row {
+    display: flex; flex-wrap: wrap; gap: 10px 16px;
+    margin-top: 10px;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--sub);
+  }
+  .legend-dot {
+    width: 24px; height: 3px; border-radius: 2px; flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Финансовая модель</h1>
+  <div class="sub">Накопления на квартиру</div>
+</div>
+
+<!-- Метрики -->
+<div class="metrics-grid" id="metrics-grid">
+  <div class="loader" style="grid-column:1/-1"><div class="spinner"></div>Загрузка…</div>
+</div>
+
+<!-- Сценарии достижения цели -->
+<div class="section" id="section-scenarios" style="display:none">
+  <div class="section-title">Когда достигнем цели</div>
+  <div class="scenarios-grid">
+    <div class="scenario-card opt">
+      <div class="sc-icon">🚀</div>
+      <div class="sc-name">Оптимистично</div>
+      <div class="sc-rate">20% годовых</div>
+      <div class="sc-date" id="sc-opt-date">—</div>
+      <div class="sc-left" id="sc-opt-left">—</div>
+    </div>
+    <div class="scenario-card base">
+      <div class="sc-icon">📈</div>
+      <div class="sc-name">Базово</div>
+      <div class="sc-rate">12% годовых</div>
+      <div class="sc-date" id="sc-base-date">—</div>
+      <div class="sc-left" id="sc-base-left">—</div>
+    </div>
+    <div class="scenario-card cons">
+      <div class="sc-icon">🐢</div>
+      <div class="sc-name">Консерв.</div>
+      <div class="sc-rate">8% годовых</div>
+      <div class="sc-date" id="sc-cons-date">—</div>
+      <div class="sc-left" id="sc-cons-left">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Настройки модели -->
+<div class="section">
+  <div class="section-title">Настройки модели</div>
+  <div class="settings-card">
+    <div class="field">
+      <label>Ежемесячный взнос, ₽</label>
+      <input type="number" id="inp-saving" value="580200" min="0" step="1000">
+    </div>
+    <div class="field">
+      <label>Цель, ₽</label>
+      <input type="number" id="inp-target" value="10000000" min="0" step="100000">
+    </div>
+    <button class="btn-recalc" id="btn-recalc">Пересчитать</button>
+  </div>
+</div>
+
+<!-- Основной график -->
+<div class="section" id="section-main-chart" style="display:none">
+  <div class="section-title">Прогноз роста</div>
+  <div class="chart-card">
+    <div class="chart-title">Факт + прогнозы</div>
+    <canvas id="chart-main"></canvas>
+    <div class="legend-row">
+      <div class="legend-item"><div class="legend-dot" style="background:#e2e2f0"></div>Факт</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ade80;opacity:.85"></div>Оптимистично</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#fbbf24;opacity:.85"></div>Базово</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f87171;opacity:.85"></div>Консервативно</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#8888aa;border-top:2px dashed #8888aa;height:0;margin-top:1px"></div>Цель</div>
+    </div>
+  </div>
+</div>
+
+<!-- График разбивки роста -->
+<div class="section" id="section-bar-chart" style="display:none">
+  <div class="section-title">Взнос vs проценты</div>
+  <div class="chart-card">
+    <div class="chart-title">Структура роста (прогноз, базовый)</div>
+    <canvas id="chart-bar"></canvas>
+    <div class="legend-row">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div>Взнос</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--accent2)"></div>Проценты</div>
+    </div>
+  </div>
+</div>
+
+<!-- Инсайты -->
+<div class="section" id="section-insights" style="display:none">
+  <div class="section-title">Ключевые инсайты</div>
+  <div class="insights-list">
+    <div class="insight-item">
+      <div class="ins-icon">💰</div>
+      <div class="ins-text">
+        <div class="ins-title">Проценты уже приносят</div>
+        <div class="ins-value accent2" id="ins-interest">—</div>
+      </div>
+    </div>
+    <div class="insight-item">
+      <div class="ins-icon">📅</div>
+      <div class="ins-text">
+        <div class="ins-title">Взносов до цели (базовый сценарий)</div>
+        <div class="ins-value yellow" id="ins-count">—</div>
+      </div>
+    </div>
+    <div class="insight-item">
+      <div class="ins-icon">📊</div>
+      <div class="ins-text">
+        <div class="ins-title">Проценты покрывают от взноса</div>
+        <div class="ins-value green" id="ins-cover">—</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav">
+  <a href="/" class="nav-item"><span class="icon">💸</span><span>Расходы</span></a>
+  <a href="/analytics" class="nav-item"><span class="icon">📊</span><span>Аналитика</span></a>
+  <a href="/assets" class="nav-item"><span class="icon">🏦</span><span>Активы</span></a>
+  <a href="/history" class="nav-item"><span class="icon">🕐</span><span>История</span></a>
+  <a href="/model" class="nav-item active"><span class="icon">📋</span><span>Модель</span></a>
+</nav>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const userId = tg?.initDataUnsafe?.user?.id || 614688432;
+
+function fmtRub(v) {
+  return new Intl.NumberFormat('ru').format(Math.round(v)) + ' ₽';
+}
+function fmtRubShort(v) {
+  if (v >= 1e6) return (v / 1e6).toFixed(1).replace('.0', '') + ' млн ₽';
+  if (v >= 1e3) return Math.round(v / 1e3) + ' тыс. ₽';
+  return Math.round(v) + ' ₽';
+}
+
+let chartMain = null;
+let chartBar = null;
+
+function destroyChart(c) {
+  if (c) { try { c.destroy(); } catch(e) {} }
+  return null;
+}
+
+function render(data) {
+  // Метрики
+  const remaining = Math.max(0, data.target - data.current);
+  const metricsHtml = `
+    <div class="metric-card">
+      <div class="m-label">Текущий вклад</div>
+      <div class="m-value accent2">${fmtRub(data.current)}</div>
+    </div>
+    <div class="metric-card">
+      <div class="m-label">Цель</div>
+      <div class="m-value">${fmtRubShort(data.target)}</div>
+    </div>
+    <div class="metric-card">
+      <div class="m-label">Осталось накопить</div>
+      <div class="m-value yellow">${fmtRub(remaining)}</div>
+    </div>
+    <div class="metric-card">
+      <div class="m-label">Прогресс</div>
+      <div class="m-value accent">${data.progress_pct}%</div>
+      <div class="progress-wrap">
+        <div class="progress-bar" style="width:${Math.min(100, data.progress_pct)}%"></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('metrics-grid').innerHTML = metricsHtml;
+
+  // Сценарии
+  function fillScenario(idDate, idLeft, info) {
+    if (info) {
+      document.getElementById(idDate).textContent = info.label;
+      document.getElementById(idLeft).textContent = 'через ' + info.months_left + ' мес.';
+    } else {
+      document.getElementById(idDate).textContent = '>3 лет';
+      document.getElementById(idLeft).textContent = '';
+    }
+  }
+  fillScenario('sc-opt-date',  'sc-opt-left',  data.targets.optimistic);
+  fillScenario('sc-base-date', 'sc-base-left', data.targets.base);
+  fillScenario('sc-cons-date', 'sc-cons-left', data.targets.conservative);
+  document.getElementById('section-scenarios').style.display = '';
+
+  // Инсайты
+  const interest = data.monthly_interest_current;
+  const saving   = data.monthly_saving;
+  const coverPct = saving > 0 ? Math.round(interest / saving * 100) : 0;
+  const baseForecast = data.forecast.base || [];
+  const countLeft = baseForecast.length;
+  document.getElementById('ins-interest').textContent = fmtRub(interest) + '/мес';
+  document.getElementById('ins-count').textContent    = countLeft + ' взносов';
+  document.getElementById('ins-cover').textContent    = coverPct + '%';
+  document.getElementById('section-insights').style.display = '';
+
+  // ── Основной график ──
+  document.getElementById('section-main-chart').style.display = '';
+
+  // Объединяем метки
+  const actualMonths  = (data.actual || []).map(p => p.month);
+  const optMonths     = (data.forecast.optimistic  || []).map(p => p.month);
+  const baseMonths    = (data.forecast.base        || []).map(p => p.month);
+  const consMonths    = (data.forecast.conservative|| []).map(p => p.month);
+  const allMonthsSet  = new Set([...actualMonths, ...optMonths, ...baseMonths, ...consMonths]);
+  const allMonths     = Array.from(allMonthsSet).sort();
+
+  const labelMap = {};
+  [...(data.actual||[]), ...(data.forecast.optimistic||[]), ...(data.forecast.base||[]), ...(data.forecast.conservative||[])].forEach(p => {
+    labelMap[p.month] = p.label;
+  });
+
+  function buildDataset(points, months) {
+    const map = {};
+    points.forEach(p => { map[p.month] = p.amount; });
+    return months.map(m => map[m] != null ? map[m] : null);
+  }
+
+  const labels = allMonths.map(m => labelMap[m] || m);
+
+  // Линия цели
+  const targetLine = allMonths.map(() => data.target);
+
+  chartMain = destroyChart(chartMain);
+  const ctxMain = document.getElementById('chart-main').getContext('2d');
+  chartMain = new Chart(ctxMain, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Факт',
+          data: buildDataset(data.actual || [], allMonths),
+          borderColor: '#e2e2f0',
+          borderWidth: 3,
+          pointRadius: 3,
+          pointBackgroundColor: '#e2e2f0',
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Оптимистично',
+          data: buildDataset(data.forecast.optimistic || [], allMonths),
+          borderColor: '#4ade80',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Базово',
+          data: buildDataset(data.forecast.base || [], allMonths),
+          borderColor: '#fbbf24',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Консервативно',
+          data: buildDataset(data.forecast.conservative || [], allMonths),
+          borderColor: '#f87171',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          spanGaps: false,
+        },
+        {
+          label: 'Цель ' + fmtRubShort(data.target),
+          data: targetLine,
+          borderColor: 'rgba(136,136,170,0.55)',
+          borderWidth: 1,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          fill: false,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      animation: { duration: 400 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ctx.dataset.label + ': ' + (ctx.parsed.y != null ? fmtRub(ctx.parsed.y) : '—'),
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8888aa', font: { size: 10 }, maxTicksLimit: 8 },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+        y: {
+          ticks: {
+            color: '#8888aa', font: { size: 10 },
+            callback: v => fmtRubShort(v),
+          },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+        },
+      },
+    },
+  });
+
+  // ── Bar chart: взнос vs проценты — первые 12 месяцев базового прогноза ──
+  const barData = (data.forecast.base || []).slice(0, 12);
+  if (barData.length > 0) {
+    document.getElementById('section-bar-chart').style.display = '';
+    const barLabels   = barData.map(p => p.label);
+    const barSaving   = barData.map(() => Math.round(data.monthly_saving));
+    const barInterest = barData.map(p => p.interest || 0);
+
+    chartBar = destroyChart(chartBar);
+    const ctxBar = document.getElementById('chart-bar').getContext('2d');
+    chartBar = new Chart(ctxBar, {
+      type: 'bar',
+      data: {
+        labels: barLabels,
+        datasets: [
+          {
+            label: 'Взнос',
+            data: barSaving,
+            backgroundColor: '#7c6af7cc',
+            borderRadius: 4,
+          },
+          {
+            label: 'Проценты',
+            data: barInterest,
+            backgroundColor: '#5eead4cc',
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        animation: { duration: 400 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ctx.dataset.label + ': ' + fmtRub(ctx.parsed.y),
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { color: '#8888aa', font: { size: 10 } },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+          },
+          y: {
+            stacked: true,
+            ticks: {
+              color: '#8888aa', font: { size: 10 },
+              callback: v => fmtRubShort(v),
+            },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+          },
+        },
+      },
+    });
+  }
+}
+
+function load() {
+  const saving = parseFloat(document.getElementById('inp-saving').value) || 580200;
+  const target = parseFloat(document.getElementById('inp-target').value) || 10000000;
+
+  document.getElementById('metrics-grid').innerHTML =
+    '<div class="loader" style="grid-column:1/-1"><div class="spinner"></div>Загрузка…</div>';
+  document.getElementById('section-scenarios').style.display   = 'none';
+  document.getElementById('section-main-chart').style.display  = 'none';
+  document.getElementById('section-bar-chart').style.display   = 'none';
+  document.getElementById('section-insights').style.display    = 'none';
+
+  const url = `/api/model?user_id=${userId}&monthly_saving=${saving}&target=${target}`;
+  fetch(url)
+    .then(r => r.json())
+    .then(data => render(data))
+    .catch(err => {
+      document.getElementById('metrics-grid').innerHTML =
+        '<div style="grid-column:1/-1;color:var(--sub);padding:20px 0;text-align:center">Ошибка загрузки данных</div>';
+      console.error(err);
+    });
+}
+
+document.getElementById('btn-recalc').addEventListener('click', load);
+
+// Chart.js defaults
+Chart.defaults.color = 'rgba(232,232,240,0.5)';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+load();
+</script>
+</body>
+</html>
