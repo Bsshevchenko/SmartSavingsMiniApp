@@ -261,9 +261,15 @@
       height: 54px;
       cursor: pointer;
       font-family: inherit;
-      transition: background 0.1s, transform 0.1s;
+      transition: background 0.12s, transform 0.12s, box-shadow 0.12s;
     }
     .num-btn:active { background: rgba(255,255,255,0.16); transform: scale(0.94); }
+    .num-btn.pressed {
+      background: rgba(139,92,246,0.28);
+      border-color: rgba(139,92,246,0.5);
+      box-shadow: 0 0 12px rgba(139,92,246,0.35);
+      transform: scale(0.94);
+    }
     .num-btn.del-btn { font-size: 18px; color: var(--muted); }
     .num-btn.dot-btn { font-size: 28px; }
 
@@ -566,6 +572,19 @@ if (tg) {
     document.getElementById('submit-btn').style.display = 'none';
   }
 }
+
+// ── Numpad button highlight on touch ──
+document.querySelectorAll('.num-btn').forEach(function(btn) {
+  btn.addEventListener('touchstart', function() {
+    btn.classList.add('pressed');
+  }, { passive: true });
+  btn.addEventListener('touchend', function() {
+    setTimeout(function() { btn.classList.remove('pressed'); }, 120);
+  }, { passive: true });
+  btn.addEventListener('touchcancel', function() {
+    btn.classList.remove('pressed');
+  }, { passive: true });
+});
 
 // ── Note input: hide numpad when keyboard is open on mobile ──
 var noteInput = document.getElementById('note-input');
