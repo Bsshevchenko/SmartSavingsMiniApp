@@ -29,24 +29,36 @@ log = logging.getLogger(__name__)
 _MAX_AGE_SECONDS = 24 * 60 * 60
 
 
+def _hash_matches(pairs: dict, received_hash: str) -> bool:
+    """HMAC-SHA256 от data_check_string секретом из BOT_TOKEN сверяется с hash."""
+    data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+    secret_key = hmac.new(b"WebAppData", settings.BOT_TOKEN.encode(), hashlib.sha256).digest()
+    computed = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, received_hash)
+
+
 def _validate_init_data(init_data: str) -> dict | None:
     """Проверяет подпись initData. Возвращает dict пользователя или None."""
     if not init_data:
         return None
-    try:
-        pairs = dict(parse_qsl(init_data, strict_parsing=True))
-    except ValueError:
-        return None
+
+    # keep_blank_values=True — пустые поля тоже участвуют в подписи Telegram
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
 
     received_hash = pairs.pop("hash", None)
     if not received_hash:
+        log.warning("initData без поля hash (поля: %s)", sorted(pairs))
         return None
 
-    data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
-    secret_key = hmac.new(b"WebAppData", settings.BOT_TOKEN.encode(), hashlib.sha256).digest()
-    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-
-    if not hmac.compare_digest(computed_hash, received_hash):
+    # Современные клиенты Telegram добавляют поле signature (Ed25519).
+    # В разных версиях оно по-разному учитывается в data_check_string —
+    # проверяем подпись с ним и без него, принимаем любой совпавший вариант.
+    # Оба варианта — HMAC по секрету из BOT_TOKEN, подделать без токена нельзя.
+    ok = _hash_matches(pairs, received_hash)
+    if not ok and "signature" in pairs:
+        ok = _hash_matches({k: v for k, v in pairs.items() if k != "signature"}, received_hash)
+    if not ok:
+        log.warning("initData: подпись не совпала (поля: %s)", sorted(pairs))
         return None
 
     # initData не должна быть слишком старой (защита от воспроизведения)
@@ -54,6 +66,7 @@ def _validate_init_data(init_data: str) -> dict | None:
     if auth_date:
         try:
             if time.time() - int(auth_date) > _MAX_AGE_SECONDS:
+                log.warning("initData просрочена (auth_date=%s)", auth_date)
                 return None
         except ValueError:
             return None
@@ -89,6 +102,8 @@ async def require_user_id(
     x_telegram_init_data: str | None = Header(default=None),
 ) -> int:
     """FastAPI-зависимость: аутентифицированный user_id либо 401."""
+    if not x_telegram_init_data:
+        log.warning("Запрос к API без заголовка X-Telegram-Init-Data")
     user_id = resolve_user_id(x_telegram_init_data)
     if user_id is None:
         raise HTTPException(
