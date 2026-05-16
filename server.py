@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import update_daily_rates
 import update_monthly_rates
 import db_repo
+from tg_auth import require_user_id
 
 WEB_DIR = Path(__file__).parent / "web"
 DB_PATH = Path(__file__).parent / "data" / "app.db"
@@ -143,7 +144,6 @@ def convert_h(
 
 
 class EntryCreate(BaseModel):
-    user_id: int
     mode: str
     amount: float
     currency: str
@@ -152,7 +152,6 @@ class EntryCreate(BaseModel):
 
 
 class EntryUpdate(BaseModel):
-    user_id: int
     amount: float | None = None
     currency: str | None = None
     category: str | None = None
@@ -181,11 +180,11 @@ async def history_page():
 
 
 @app.post("/api/entry")
-async def create_entry(body: EntryCreate):
+async def create_entry(body: EntryCreate, user_id: int = Depends(require_user_id)):
     import asyncio
     entry_id = await asyncio.to_thread(
         db_repo.save_entry,
-        user_id=body.user_id,
+        user_id=user_id,
         mode=body.mode,
         amount=body.amount,
         currency_code=body.currency,
@@ -198,7 +197,7 @@ async def create_entry(body: EntryCreate):
 
 @app.get("/api/history")
 async def history_data(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     limit: int = Query(30),
     offset: int = Query(0),
 ):
@@ -209,7 +208,7 @@ async def history_data(
 
 
 @app.delete("/api/entry/{entry_id}")
-async def delete_entry(entry_id: int, user_id: int = Query(...)):
+async def delete_entry(entry_id: int, user_id: int = Depends(require_user_id)):
     if not DB_PATH.exists():
         return JSONResponse({"ok": False}, status_code=404)
     deleted = db_repo.delete_entry(user_id, entry_id, db_path=DB_PATH)
@@ -217,11 +216,13 @@ async def delete_entry(entry_id: int, user_id: int = Query(...)):
 
 
 @app.patch("/api/entry/{entry_id}")
-async def update_entry(entry_id: int, body: EntryUpdate):
+async def update_entry(
+    entry_id: int, body: EntryUpdate, user_id: int = Depends(require_user_id)
+):
     if not DB_PATH.exists():
         return JSONResponse({"ok": False}, status_code=404)
     updated = db_repo.update_entry(
-        user_id=body.user_id,
+        user_id=user_id,
         entry_id=entry_id,
         amount=body.amount,
         currency_code=body.currency,
@@ -233,7 +234,7 @@ async def update_entry(entry_id: int, body: EntryUpdate):
 
 
 @app.get("/api/user-data")
-async def user_data(user_id: int = Query(...)):
+async def user_data(user_id: int = Depends(require_user_id)):
     if not DB_PATH.exists():
         return JSONResponse({"currencies": [], "categories": {"expense": [], "income": [], "asset": []}})
 
@@ -264,7 +265,7 @@ async def assets_page():
 
 @app.get("/api/realty-history")
 async def realty_history(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     realty_id: int = Query(...),
     currency: str = Query("USD"),
 ):
@@ -319,7 +320,7 @@ async def realty_history(
 
 @app.get("/api/asset-history")
 async def asset_history(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     ticker: str = Query(...),
     currency: str = Query("USD"),
 ):
@@ -446,7 +447,7 @@ async def asset_history(
 
 @app.get("/api/assets")
 async def assets_data(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     currency: str = Query("USD"),
 ):
     if not DB_PATH.exists():
@@ -674,7 +675,7 @@ async def fin_model_page():
 
 @app.get("/api/model")
 async def model_data(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     monthly_saving: float = Query(580200),
     target: float = Query(10000000),
 ):
@@ -810,7 +811,7 @@ async def model_data(
 
 @app.get("/api/fin-model")
 async def fin_model_data(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     monthly_saving: float = Query(580200),
     apartment_cost: float = Query(10000000),
     rent_gross: float = Query(65000),
@@ -1123,7 +1124,7 @@ async def fin_model_data(
 
 @app.get("/api/analytics")
 async def analytics_data(
-    user_id: int = Query(...),
+    user_id: int = Depends(require_user_id),
     period: str = Query("6m"),
     currency: str = Query("VND"),
 ):

@@ -279,6 +279,23 @@
 
 <script>
 var tg = window.Telegram && window.Telegram.WebApp;
+
+// ── Авторизация API: подписываем все запросы Telegram initData ──
+(function() {
+  var initData = (tg && tg.initData) ? tg.initData : '';
+  var _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers || {}, { 'X-Telegram-Init-Data': initData });
+    return _fetch.call(this, url, opts);
+  };
+  var _open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function() {
+    _open.apply(this, arguments);
+    try { this.setRequestHeader('X-Telegram-Init-Data', initData); } catch (e) {}
+  };
+})();
+
 if (tg) { tg.ready(); tg.expand(); }
 
 var userId = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user)
