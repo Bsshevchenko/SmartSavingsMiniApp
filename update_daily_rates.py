@@ -89,40 +89,49 @@ def fetch_crypto_rates() -> dict[str, float]:
     }
 
 
+MOEX_BOARDS = ("TQBR", "TQTF")  # акции + биржевые ПИФы/ETF
+
+
 def fetch_moex_rates(rub_to_usd: float, tickers: list[str]) -> dict[str, float]:
     """
-    Текущие цены акций через MOEX ISS /securities (один запрос).
-    LAST из marketdata = цена последней сделки (None если рынок закрыт).
-    PREVPRICE из securities = предыдущее закрытие (всегда доступно).
+    Текущие цены через MOEX ISS /securities — два запроса (TQBR акции и TQTF БПИФы),
+    результаты склеиваются. TQBR имеет приоритет при коллизии тикеров.
+    LAST из marketdata = последняя сделка; PREVPRICE = предыдущее закрытие (fallback).
     """
     if not tickers:
         return {}
-    tickers = ",".join(tickers)
-    url = (
-        f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR"
-        f"/securities.json?securities={tickers}&iss.meta=off"
-    )
-    data = fetch_json(url)
+    tickers_csv = ",".join(tickers)
+    result: dict[str, float] = {}
+    for board in MOEX_BOARDS:
+        url = (
+            f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/{board}"
+            f"/securities.json?securities={tickers_csv}&iss.meta=off"
+        )
+        try:
+            data = fetch_json(url)
+        except Exception as e:
+            log.warning("MOEX %s failed: %s", board, e)
+            continue
 
-    md_cols = data["marketdata"]["columns"]
-    md_rows = data["marketdata"]["data"]
-    sec_cols = data["securities"]["columns"]
-    sec_rows = data["securities"]["data"]
+        md_cols = data["marketdata"]["columns"]
+        md_rows = data["marketdata"]["data"]
+        sec_cols = data["securities"]["columns"]
+        sec_rows = data["securities"]["data"]
 
-    md_secid = md_cols.index("SECID")
-    md_last  = md_cols.index("LAST")
-    sec_secid = sec_cols.index("SECID")
-    sec_prev  = sec_cols.index("PREVPRICE")
+        md_secid = md_cols.index("SECID")
+        md_last  = md_cols.index("LAST")
+        sec_secid = sec_cols.index("SECID")
+        sec_prev  = sec_cols.index("PREVPRICE")
 
-    # Собираем PREVPRICE из securities как fallback
-    prev_prices = {row[sec_secid]: row[sec_prev] for row in sec_rows if row[sec_prev]}
+        prev_prices = {row[sec_secid]: row[sec_prev] for row in sec_rows if row[sec_prev]}
 
-    result = {}
-    for row in md_rows:
-        ticker = row[md_secid]
-        price_rub = row[md_last] or prev_prices.get(ticker)
-        if price_rub:
-            result[ticker] = float(price_rub) * rub_to_usd
+        for row in md_rows:
+            ticker = row[md_secid]
+            if ticker in result:
+                continue
+            price_rub = row[md_last] or prev_prices.get(ticker)
+            if price_rub:
+                result[ticker] = float(price_rub) * rub_to_usd
     return result
 
 

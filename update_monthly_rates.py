@@ -100,22 +100,35 @@ def fetch_crypto_on_date(coin_id: str, d: date) -> float | None:
         return None
 
 
+MOEX_BOARDS = ("TQBR", "TQTF")  # акции + биржевые ПИФы/ETF
+
+
 def fetch_moex_month_avg(ticker: str, year: int, month: int) -> list[float]:
-    """Все цены закрытия за месяц с MOEX — для настоящего среднемесячного."""
+    """
+    Все цены закрытия за месяц с MOEX — пробуем TQBR (акции), при пустом ответе TQTF (БПИФы).
+    """
     from_d = date(year, month, 1).isoformat()
     if month == 12:
         till_d = (date(year + 1, 1, 1) - timedelta(days=1)).isoformat()
     else:
         till_d = (date(year, month + 1, 1) - timedelta(days=1)).isoformat()
-    url = (
-        f"https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR"
-        f"/securities/{ticker}.json?from={from_d}&till={till_d}"
-    )
-    data = fetch_json(url, pause=0.5)
-    rows = data["history"]["data"]
-    cols = data["history"]["columns"]
-    close_idx = cols.index("CLOSE")
-    return [r[close_idx] for r in rows if r[close_idx] is not None]
+    for board in MOEX_BOARDS:
+        url = (
+            f"https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/{board}"
+            f"/securities/{ticker}.json?from={from_d}&till={till_d}"
+        )
+        try:
+            data = fetch_json(url, pause=0.5)
+        except Exception as e:
+            log.warning("MOEX %s/%s failed: %s", board, ticker, e)
+            continue
+        rows = data["history"]["data"]
+        cols = data["history"]["columns"]
+        close_idx = cols.index("CLOSE")
+        prices = [r[close_idx] for r in rows if r[close_idx] is not None]
+        if prices:
+            return prices
+    return []
 
 
 def upsert_rate(cur: sqlite3.Cursor, code: str, rate_date: str, rate: float, source: str):

@@ -122,35 +122,36 @@ def get_crypto_price_usd(coin_id: str, d: date) -> float | None:
         return None
 
 
+MOEX_BOARDS = ("TQBR", "TQTF")  # акции + биржевые ПИФы/ETF
+
+
 def get_moex_close_prices(ticker: str, year: int, month: int) -> list[float]:
     """
-    Цены закрытия акции на MOEX за месяц (в RUB).
-    Берём первые ~5 торговых дней в наших 4 точках (1, 8, 15, 22).
+    Цены закрытия за месяц (в RUB) — пробуем TQBR (акции), при пустом ответе TQTF (БПИФы).
     """
-    # Запрашиваем весь месяц сразу
     from_d = date(year, month, 1).isoformat()
-    # последний день месяца
     if month == 12:
         till_d = date(year + 1, 1, 1) - timedelta(days=1)
     else:
         till_d = date(year, month + 1, 1) - timedelta(days=1)
     till_str = till_d.isoformat()
 
-    url = (
-        f"https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR"
-        f"/securities/{ticker}.json?from={from_d}&till={till_str}"
-    )
-    try:
-        data = fetch_json(url, pause=0.5)
+    for board in MOEX_BOARDS:
+        url = (
+            f"https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/{board}"
+            f"/securities/{ticker}.json?from={from_d}&till={till_str}"
+        )
+        try:
+            data = fetch_json(url, pause=0.5)
+        except Exception:
+            continue
         rows = data["history"]["data"]
         cols = data["history"]["columns"]
-        if not rows:
-            return []
         close_idx = cols.index("CLOSE")
         prices = [r[close_idx] for r in rows if r[close_idx] is not None]
-        return prices
-    except Exception:
-        return []
+        if prices:
+            return prices
+    return []
 
 
 # ── БД ──────────────────────────────────────────────────────────────────────
