@@ -32,11 +32,25 @@ COINGECKO_IDS = {
     "USDT": "tether",
 }
 
-MOEX_TICKERS = ["BELU", "IRAO", "MAGN", "MGNT", "NVTK", "OZON", "PLZL", "SBER", "SIBN", "X5", "YDEX"]
-
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
+
+
+def get_moex_tickers(db_path: Path = DB_PATH) -> list[str]:
+    """
+    Тикеры акций — distinct из currencies минус фиат/крипта/USD/спецсимволы.
+    Динамически подхватывает новые акции, добавленные пользователями через ввод.
+    """
+    known_non_stock = {"USD"} | set(FIAT_CODES) | set(COINGECKO_IDS)
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("SELECT DISTINCT code FROM currencies")
+    codes = [r[0] for r in cur.fetchall()]
+    con.close()
+    return sorted(c for c in codes if c not in known_non_stock and c.isalnum())
 
 
 def fetch_json(url: str, retries: int = 3, pause: float = 2.0) -> dict:
@@ -156,7 +170,7 @@ def run(db_path: Path = DB_PATH, reference_date: date | None = None) -> int:
     rub_vals = rates.get("RUB", [])
     rub_avg = sum(rub_vals) / len(rub_vals) if rub_vals else 0
     if rub_avg:
-        for ticker in MOEX_TICKERS:
+        for ticker in get_moex_tickers(db_path):
             try:
                 prices_rub = fetch_moex_month_avg(ticker, year, month)
                 if prices_rub:

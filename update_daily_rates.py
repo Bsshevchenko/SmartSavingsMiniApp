@@ -32,11 +32,25 @@ COINGECKO_IDS = {
     "USDT": "tether",
 }
 
-MOEX_TICKERS = ["BELU", "IRAO", "MAGN", "MGNT", "NVTK", "OZON", "PLZL", "SBER", "SIBN", "X5", "YDEX"]
-
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
+
+
+def get_moex_tickers(db_path: Path = DB_PATH) -> list[str]:
+    """
+    Тикеры акций — distinct из currencies минус фиат/крипта/USD/спецсимволы.
+    Динамически подхватывает новые акции, добавленные пользователями через ввод.
+    """
+    known_non_stock = {"USD"} | set(FIAT_CODES) | set(COINGECKO_IDS)
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("SELECT DISTINCT code FROM currencies")
+    codes = [r[0] for r in cur.fetchall()]
+    con.close()
+    return sorted(c for c in codes if c not in known_non_stock and c.isalnum())
 
 
 def fetch_json(url: str, retries: int = 3, pause: float = 2.0) -> dict:
@@ -75,13 +89,15 @@ def fetch_crypto_rates() -> dict[str, float]:
     }
 
 
-def fetch_moex_rates(rub_to_usd: float) -> dict[str, float]:
+def fetch_moex_rates(rub_to_usd: float, tickers: list[str]) -> dict[str, float]:
     """
     Текущие цены акций через MOEX ISS /securities (один запрос).
     LAST из marketdata = цена последней сделки (None если рынок закрыт).
     PREVPRICE из securities = предыдущее закрытие (всегда доступно).
     """
-    tickers = ",".join(MOEX_TICKERS)
+    if not tickers:
+        return {}
+    tickers = ",".join(tickers)
     url = (
         f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR"
         f"/securities.json?securities={tickers}&iss.meta=off"
@@ -147,9 +163,10 @@ def run(db_path: Path = DB_PATH) -> dict[str, float]:
     rub = rates.get("RUB")
     if rub:
         try:
-            moex = fetch_moex_rates(rub)
+            tickers = get_moex_tickers(db_path)
+            moex = fetch_moex_rates(rub, tickers)
             rates.update(moex)
-            log.info("MOEX OK: %d курсов", len(moex))
+            log.info("MOEX OK: %d/%d тикеров", len(moex), len(tickers))
         except Exception as e:
             log.error("MOEX failed: %s", e)
     else:
