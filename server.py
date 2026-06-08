@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import update_daily_rates
 import update_monthly_rates
 import db_repo
+import fin_model_data
 from tg_auth import require_user_id
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -92,6 +93,15 @@ def _run_monthly():
         logging.getLogger(__name__).error("monthly_rates failed: %s", e)
 
 
+def _run_dividends():
+    """1-го числа — пере-парсим дивиденды dohod (факт/объявлено/прогноз/корреляция)."""
+    try:
+        fin_model_data.refresh_dividend_cache()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("dividends refresh failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -99,7 +109,13 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_run_daily, "cron", hour=2, minute=0, id="daily_rates")
     # 1-го числа в 03:00 UTC — фиксируем среднемесячный курс за прошлый месяц
     scheduler.add_job(_run_monthly, "cron", day=1, hour=3, minute=0, id="monthly_rates")
+    # 1-го числа в 04:00 UTC — обновляем дивиденды (после фиксации курсов)
+    scheduler.add_job(_run_dividends, "cron", day=1, hour=4, minute=0, id="dividends")
     scheduler.start()
+    # Первичное наполнение кэша дивидендов, если его ещё нет (фоном, чтобы не тормозить старт)
+    if not fin_model_data.CACHE_PATH.exists():
+        import asyncio
+        asyncio.get_running_loop().run_in_executor(None, _run_dividends)
     yield
     scheduler.shutdown()
 
@@ -810,316 +826,17 @@ async def model_data(
 
 
 @app.get("/api/fin-model")
-async def fin_model_data(
-    user_id: int = Depends(require_user_id),
-    monthly_saving: float = Query(580200),
-    apartment_cost: float = Query(10000000),
-    rent_gross: float = Query(65000),
-    vacancy_rate: float = Query(0.15),
-    mgmt_fee: float = Query(0.10),
-    maintenance: float = Query(0.05),
-    tax_rate: float = Query(0.04),
-    stock_monthly: float = Query(22500),
-    deposit_rate_conservative: float = Query(0.08),
-):
+async def fin_model_endpoint(user_id: int = Depends(require_user_id)):
+    """Дивидендная фин-модель: портфель из БД + дивиденды из месячного кэша dohod."""
     if not DB_PATH.exists():
         return JSONResponse({"error": "no db"}, status_code=500)
-
-    curr_rates = get_rates_to_usd()
-    con = get_db()
-    hist_rates = load_historical_rates(con)
-    cur = con.cursor()
-    now = datetime.now(timezone.utc)
-    since_1y = (now - timedelta(days=365)).strftime("%Y-%m-%d")
-
-    def _conv_rub(amount: float, src: str, month: str) -> float:
-        """Конвертация в RUB через USD."""
-        if src == "RUB":
-            return amount
-        src_r = hist_rates.get((src, month)) or curr_rates.get(src, 0)
-        rub_r = hist_rates.get(("RUB", month)) or curr_rates.get("RUB", 0)
-        if not src_r or not rub_r:
-            return 0.0
-        return amount * src_r / rub_r
-
-    # ── A. Текущее состояние ──
-
-    # Среднемесячные расходы за последние 12 мес
-    cur.execute("""
-        SELECT strftime('%Y-%m', e.created_at) as month,
-               CAST(e.amount AS REAL) as amt, c.code
-        FROM entries e JOIN currencies c ON c.id=e.currency_id
-        WHERE e.user_id=? AND e.mode='expense'
-          AND date(e.created_at) >= ?
-    """, (user_id, since_1y))
-    exp_by_month: dict[str, float] = {}
-    for r in cur.fetchall():
-        m = r["month"]
-        exp_by_month[m] = exp_by_month.get(m, 0) + _conv_rub(r["amt"], r["code"], m)
-    n_exp = len(exp_by_month)
-    avg_expenses = sum(exp_by_month.values()) / n_exp if n_exp else 1.0
-
-    # Пассивный доход (по ключевым словам категорий) за последние 12 мес
-    PASSIVE_KEYWORDS = ("процент", "дивиденд", "купон", "рент", "аренд")
-    cur.execute("""
-        SELECT cat.name, strftime('%Y-%m', e.created_at) as month,
-               CAST(e.amount AS REAL) as amt, c.code
-        FROM entries e
-        LEFT JOIN categories cat ON cat.id=e.category_id
-        JOIN currencies c ON c.id=e.currency_id
-        WHERE e.user_id=? AND e.mode='income'
-          AND date(e.created_at) >= ?
-    """, (user_id, since_1y))
-    passive_by_month: dict[str, float] = {}
-    for r in cur.fetchall():
-        cat_name = (r["name"] or "").lower()
-        if not any(kw in cat_name for kw in PASSIVE_KEYWORDS):
-            continue
-        m = r["month"]
-        passive_by_month[m] = passive_by_month.get(m, 0) + _conv_rub(r["amt"], r["code"], m)
-    n_passive = len(passive_by_month)
-    passive_income_monthly = sum(passive_by_month.values()) / n_passive if n_passive else 0.0
-
-    # Баланс вклада — последняя запись mode='asset', категория 'Вклад', amount > 0
-    cur.execute("""
-        SELECT CAST(e.amount AS REAL) as amount,
-               strftime('%Y-%m', e.created_at) as month,
-               c.code
-        FROM entries e
-        JOIN categories cat ON cat.id = e.category_id
-        JOIN currencies c ON c.id = e.currency_id
-        WHERE e.user_id = ? AND e.mode = 'asset' AND cat.name = 'Вклад'
-          AND CAST(e.amount AS REAL) > 0
-        ORDER BY e.created_at DESC
-        LIMIT 1
-    """, (user_id,))
-    dep_row = cur.fetchone()
-    deposit_balance_rub = 0.0
-    last_deposit_month = None
-    if dep_row:
-        deposit_balance_rub = _conv_rub(dep_row["amount"], dep_row["code"], dep_row["month"])
-        last_deposit_month = dep_row["month"]
-
-    # Ликвидные активы (вклад + USD-кэш)
-    cur.execute("""
-        SELECT CAST(e.amount AS REAL) as amt, c.code,
-               strftime('%Y-%m', e.created_at) as month
-        FROM entries e
-        JOIN currencies c ON c.id = e.currency_id
-        WHERE e.user_id = ? AND e.mode = 'asset' AND c.code = 'USD'
-          AND e.created_at = (
-              SELECT MAX(e2.created_at) FROM entries e2
-              WHERE e2.mode='asset' AND e2.user_id=e.user_id
-                AND e2.currency_id=e.currency_id
-          )
-          AND CAST(e.amount AS REAL) > 0
-    """, (user_id,))
-    usd_row = cur.fetchone()
-    usd_rub = 0.0
-    if usd_row:
-        usd_rub = _conv_rub(usd_row["amt"], "USD", usd_row["month"])
-    liquid_assets = deposit_balance_rub + usd_rub
-    liquid_months = round(liquid_assets / avg_expenses, 1) if avg_expenses else 0.0
-
-    deposit_passive_conservative = round(deposit_balance_rub * deposit_rate_conservative / 12)
-    gcr_current = round(passive_income_monthly / avg_expenses, 3) if avg_expenses else 0.0
-
-    # ── B. Чистая аренда ──
-    net_rent = rent_gross * (1 - vacancy_rate) * (1 - mgmt_fee) * (1 - maintenance) * (1 - tax_rate)
-    net_rent = round(net_rent)
-    gcr_post_purchase = round(net_rent / avg_expenses, 3) if avg_expenses else 0.0
-
-    # ── C. Прогноз фазы 1 ──
-    def next_month(ym: str) -> str:
-        y, mo = int(ym[:4]), int(ym[5:])
-        mo += 1
-        if mo > 12:
-            mo = 1
-            y += 1
-        return f"{y:04d}-{mo:02d}"
-
-    def month_label(ym: str) -> str:
-        mo_idx = int(ym[5:]) - 1
-        return RU_MONTHS[mo_idx] + " " + ym[2:4]
-
-    def months_between(from_ym: str, to_ym: str) -> int:
-        fy, fm = int(from_ym[:4]), int(from_ym[5:])
-        ty, tm = int(to_ym[:4]), int(to_ym[5:])
-        return (ty - fy) * 12 + (tm - fm)
-
-    current_month = now.strftime("%Y-%m")
-    start_month = last_deposit_month if last_deposit_month else current_month
-
-    scenarios_rates = {"optimistic": 0.20, "base": 0.14, "conservative": 0.10}
-    phase1_forecast: dict[str, list] = {}
-    reach_target: dict[str, dict | None] = {}
-
-    for name, annual_rate in scenarios_rates.items():
-        monthly_rate = annual_rate / 12
-        series = []
-        balance = deposit_balance_rub
-        m = next_month(start_month)
-        months_count = 0
-        while months_count < 48:
-            interest = round(balance * monthly_rate)
-            balance = balance * (1 + monthly_rate) + monthly_saving
-            mo_idx = int(m[5:]) - 1
-            series.append({
-                "month": m,
-                "label": month_label(m),
-                "amount": round(balance, 2),
-                "interest": interest,
-            })
-            months_count += 1
-            if balance >= apartment_cost:
-                break
-            m = next_month(m)
-        phase1_forecast[name] = series
-        if series and series[-1]["amount"] >= apartment_cost:
-            target_month = series[-1]["month"]
-            months_left = months_between(current_month, target_month)
-            reach_target[name] = {
-                "month": target_month,
-                "label": month_label(target_month),
-                "months_left": months_left,
-            }
-        else:
-            reach_target[name] = None
-
-    # ── D. GCR прогноз по годам ──
-    # Определяем год покупки квартиры (базовый сценарий)
-    purchase_year = None
-    if reach_target["base"]:
-        purchase_year = int(reach_target["base"]["month"][:4])
-    elif reach_target["optimistic"]:
-        purchase_year = int(reach_target["optimistic"]["month"][:4])
-    else:
-        purchase_year = 2030  # fallback
-
-    dividend_yield = 0.07
-    haircut = 0.6
-    gcr_100_year = None
-    gcr_forecast = []
-
-    # Баланс вклада на начало расчёта
-    sim_balance = deposit_balance_rub
-    base_rate = 0.14 / 12
-    # Симуляция по месяцам базового сценария для точного баланса по годам
-    balance_by_month: dict[str, float] = {start_month: deposit_balance_rub}
-    m = next_month(start_month)
-    for _ in range(72):
-        sim_balance = sim_balance * (1 + base_rate) + monthly_saving
-        balance_by_month[m] = sim_balance
-        if sim_balance >= apartment_cost:
-            break
-        m = next_month(m)
-
-    # Накопленные инвестиции в акции к году
-    stock_accumulated_by_year: dict[int, float] = {}
-    for yr in range(2026, 2032):
-        months_from_now = (yr - int(current_month[:4])) * 12
-        stock_accumulated_by_year[yr] = stock_monthly * max(0, months_from_now)
-
-    for year in range(2026, 2032):
-        year_month = f"{year}-06"
-        if year < purchase_year:
-            # Фаза 1: пассивный доход = проценты по вкладу (cons ставка)
-            dep_bal = balance_by_month.get(year_month) or deposit_balance_rub
-            dep_passive = dep_bal * deposit_rate_conservative / 12
-            passive = passive_income_monthly + dep_passive
-            phase = 1
-        else:
-            # Фаза 2/3: аренда + дивиденды
-            years_since_purchase = year - purchase_year
-            stock_total = stock_accumulated_by_year.get(year, 0)
-            dividends = stock_total * dividend_yield * haircut / 12
-            passive = net_rent + dividends
-            phase = 2 if years_since_purchase < 3 else 3
-        gcr = round(passive / avg_expenses, 3) if avg_expenses else 0.0
-        gcr_forecast.append({
-            "year": year,
-            "gcr": gcr,
-            "gcr_pct": round(gcr * 100, 1),
-            "passive": round(passive),
-            "phase": phase,
-        })
-        if gcr >= 1.0 and gcr_100_year is None:
-            gcr_100_year = year
-
-    # ── E. Стресс-тесты ──
-    def stress_status(gcr_val: float) -> str:
-        if gcr_val >= 0.5:
-            return "ok"
-        elif gcr_val >= 0.25:
-            return "warning"
-        else:
-            return "danger"
-
-    stress_tests = []
-    # Базовый
-    g = gcr_post_purchase
-    stress_tests.append({"name": "Базовый", "gcr": round(g, 3), "gcr_pct": round(g * 100, 1),
-                          "passive": round(net_rent), "status": stress_status(g)})
-    # Аренда -30%
-    passive_s = net_rent * 0.7
-    g = round(passive_s / avg_expenses, 3) if avg_expenses else 0.0
-    stress_tests.append({"name": "Аренда −30%", "gcr": g, "gcr_pct": round(g * 100, 1),
-                          "passive": round(passive_s), "status": stress_status(g)})
-    # Простой 6 мес.
-    passive_s = net_rent * (6 / 12)
-    g = round(passive_s / avg_expenses, 3) if avg_expenses else 0.0
-    stress_tests.append({"name": "Простой 6 мес.", "gcr": g, "gcr_pct": round(g * 100, 1),
-                          "passive": round(passive_s), "status": stress_status(g)})
-    # Расходы +30%
-    passive_s = net_rent
-    g = round(passive_s / (avg_expenses * 1.3), 3) if avg_expenses else 0.0
-    stress_tests.append({"name": "Расходы +30%", "gcr": g, "gcr_pct": round(g * 100, 1),
-                          "passive": round(passive_s), "status": stress_status(g)})
-    # Комбо-кризис
-    passive_s = net_rent * 0.7 * (9 / 12)
-    g = round(passive_s / (avg_expenses * 1.2), 3) if avg_expenses else 0.0
-    stress_tests.append({"name": "Комбо-кризис", "gcr": g, "gcr_pct": round(g * 100, 1),
-                          "passive": round(passive_s), "status": stress_status(g)})
-
-    con.close()
-
-    progress_pct = round(deposit_balance_rub / apartment_cost * 100, 1) if apartment_cost else 0.0
-
-    return JSONResponse({
-        "current": {
-            "gcr": gcr_current,
-            "gcr_pct": round(gcr_current * 100, 1),
-            "passive_income": round(passive_income_monthly),
-            "avg_expenses": round(avg_expenses),
-            "deposit_balance": round(deposit_balance_rub),
-            "liquid_months": liquid_months,
-            "deposit_passive_conservative": deposit_passive_conservative,
-        },
-        "rental": {
-            "gross": round(rent_gross),
-            "net": net_rent,
-            "vacancy_rate": vacancy_rate,
-            "mgmt_fee": mgmt_fee,
-            "maintenance": maintenance,
-            "tax_rate": tax_rate,
-            "gcr_post_purchase": gcr_post_purchase,
-            "gcr_post_purchase_pct": round(gcr_post_purchase * 100, 1),
-        },
-        "phase1": {
-            "target": apartment_cost,
-            "progress_pct": progress_pct,
-            "optimistic": phase1_forecast["optimistic"],
-            "base": phase1_forecast["base"],
-            "conservative": phase1_forecast["conservative"],
-            "reach_target": reach_target,
-        },
-        "gcr_forecast": gcr_forecast,
-        "stress_tests": stress_tests,
-        "monthly_saving": monthly_saving,
-        "stock_monthly": stock_monthly,
-        "gcr_100_year": gcr_100_year,
-        "purchase_year": purchase_year,
-    })
+    try:
+        data = fin_model_data.build_fin_model(user_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("fin-model build failed: %s", e)
+        return JSONResponse({"error": "build failed"}, status_code=500)
+    return JSONResponse(data)
 
 
 @app.get("/api/analytics")
