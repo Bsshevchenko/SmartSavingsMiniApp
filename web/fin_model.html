@@ -632,7 +632,8 @@ function computeYear(year, p) {
   // помесячная стоимость портфеля и накопленные вложения (тело)
   const portfolioByMonth = [], investedByMonth = [];
   for (let m = 0; m < 12; m++) {
-    const monthEnd = `${year}-${String(m+1).padStart(2,'0')}-31`;
+    const lastDom = new Date(Date.UTC(year, m + 1, 0)).getUTCDate();   // реальный последний день месяца
+    const monthEnd = `${year}-${String(m+1).padStart(2,'0')}-${String(lastDom).padStart(2,'0')}`;
     const gp = Math.pow(1 + pg, Math.max(0, monthsBetween(DATA.today, monthEnd)) / 12);
     const buysDone = buyDates.filter(d => d <= monthEnd).length;
     let val = 0;
