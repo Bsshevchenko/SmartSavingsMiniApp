@@ -1270,3 +1270,110 @@ async def analytics_data(
             "total_entries": total_entries,
         }
     })
+
+
+@app.get("/api/expense-trends")
+async def expense_trends(user_id: int = Depends(require_user_id)):
+    """Тренды для аналитики (в RUB, по завершённым месяцам, скользящее окно ≤12 мес):
+    1) среднемесячные расходы и их MoM-динамика; 2) доля расходов от доходов."""
+    if not DB_PATH.exists():
+        return JSONResponse({"months": []})
+    curr_rates = get_rates_to_usd()
+    con = get_db()
+    hist_rates = load_historical_rates(con)
+    cur = con.cursor()
+
+    cur.execute("""
+        SELECT strftime('%Y-%m', e.created_at) AS m, e.mode AS mode, COALESCE(cat.name,'Прочее') AS cat,
+               CAST(e.amount AS REAL) AS amt, c.code AS code
+        FROM entries e JOIN currencies c ON c.id=e.currency_id
+        LEFT JOIN categories cat ON cat.id=e.category_id
+        WHERE e.user_id=? AND e.mode IN ('expense','income')
+    """, (user_id,))
+    exp: dict[str, float] = {}
+    inc: dict[str, float] = {}
+    exp_cat: dict[str, dict] = {}   # month -> {категория: rub}
+    inc_cat: dict[str, dict] = {}
+    for r in cur.fetchall():
+        v = convert_h(r["amt"], r["code"], "RUB", r["m"], hist_rates, curr_rates)
+        if r["mode"] == "expense":
+            exp[r["m"]] = exp.get(r["m"], 0) + v
+            exp_cat.setdefault(r["m"], {})[r["cat"]] = exp_cat.setdefault(r["m"], {}).get(r["cat"], 0) + v
+        else:
+            inc[r["m"]] = inc.get(r["m"], 0) + v
+            inc_cat.setdefault(r["m"], {})[r["cat"]] = inc_cat.setdefault(r["m"], {}).get(r["cat"], 0) + v
+    con.close()
+
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    months = sorted(set(exp) | set(inc))
+    completed = [m for m in months if m < this_month]    # текущий неполный месяц не берём
+    completed = completed[1:]                            # первый месяц (онбординг, неполный) тоже
+
+    out = []
+    prev_avg = prev_ratio = None
+    for i, m in enumerate(completed):
+        win = completed[max(0, i - 11):i + 1]            # скользящее окно ≤12 мес
+        avg_e = sum(exp.get(w, 0) for w in win) / len(win)
+        sum_e = sum(exp.get(w, 0) for w in win)
+        sum_i = sum(inc.get(w, 0) for w in win)
+        ratio = (sum_e / sum_i * 100) if sum_i else 0
+        avg_chg = ((avg_e / prev_avg - 1) * 100) if prev_avg else None
+        ratio_chg = (ratio - prev_ratio) if prev_ratio is not None else None
+        y, mo = int(m[:4]), int(m[5:7])
+        out.append({
+            "month": m, "label": f"{RU_MONTHS[mo-1]} {str(y)[2:]}",
+            "avg_expense": round(avg_e), "avg_change_pct": round(avg_chg, 1) if avg_chg is not None else None,
+            "expense_ratio": round(ratio, 1), "ratio_change_pp": round(ratio_chg, 1) if ratio_chg is not None else None,
+        })
+        prev_avg, prev_ratio = avg_e, ratio
+
+    # ── События за последний завершённый месяц ──
+    def money(v):
+        return f"{round(v):,}".replace(",", " ")
+
+    MONTHS_FULL = ["", "январь", "февраль", "март", "апрель", "май", "июнь",
+                   "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
+    events = []
+    period_label = None
+    if completed:
+        M = completed[-1]
+        prevM = completed[-2] if len(completed) >= 2 else None
+        ml = MONTHS_FULL[int(M[5:7])]
+        period_label = f"{ml} {M[:4]}"
+        eM, iM = exp.get(M, 0), inc.get(M, 0)
+        avg = out[-1]["avg_expense"] if out else 0
+        ratio = out[-1]["expense_ratio"] if out else 0
+
+        if avg:
+            dpct = (eM / avg - 1) * 100
+            below = eM <= avg
+            events.append({"icon": "💸", "tone": "good" if below else "bad",
+                           "title": f"Расходы за {ml}: {money(eM)} ₽",
+                           "detail": f"На {abs(dpct):.0f}% {'ниже' if below else 'выше'} среднего за год ({money(avg)} ₽)."})
+        if iM:
+            top_inc = sorted(inc_cat.get(M, {}).items(), key=lambda x: -x[1])[:2]
+            events.append({"icon": "💰", "tone": "good",
+                           "title": f"Доход за {ml}: {money(iM)} ₽",
+                           "detail": ", ".join(f"{n} {money(v)}" for n, v in top_inc if v >= 1000) or "—"})
+        if iM:
+            ratioM = eM / iM * 100
+            events.append({"icon": "📊", "tone": "good" if ratioM < 50 else "neutral",
+                           "title": f"Потрачено {ratioM:.0f}% дохода за {ml}",
+                           "detail": f"Отложено {max(0, 100 - ratioM):.0f}% дохода месяца."})
+        cats = sorted(exp_cat.get(M, {}).items(), key=lambda x: -x[1])
+        if cats and eM:
+            c, a = cats[0]
+            events.append({"icon": "🛒", "tone": "neutral",
+                           "title": f"Крупнейшая статья: {c} — {money(a)} ₽",
+                           "detail": f"{a / eM * 100:.0f}% расходов месяца."})
+        if prevM:
+            allc = set(exp_cat.get(M, {})) | set(exp_cat.get(prevM, {}))
+            diffs = sorted(((c, exp_cat.get(M, {}).get(c, 0) - exp_cat.get(prevM, {}).get(c, 0)) for c in allc),
+                           key=lambda x: -x[1])
+            if diffs and diffs[0][1] >= 15000:
+                c, d = diffs[0]
+                events.append({"icon": "📈", "tone": "bad",
+                               "title": f"Выросли траты: {c} +{money(d)} ₽",
+                               "detail": f"Было {money(exp_cat.get(prevM, {}).get(c, 0))}, стало {money(exp_cat.get(M, {}).get(c, 0))}."})
+
+    return JSONResponse({"months": out[-12:], "events": events, "period_label": period_label})

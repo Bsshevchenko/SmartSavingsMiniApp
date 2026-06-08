@@ -120,7 +120,7 @@
     /* ── Stat cards ── */
     #stat-cards {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 8px;
     }
     .stat-card {
@@ -138,6 +138,21 @@
     .stat-card.exp .stat-value { color: var(--exp); }
     .stat-card.inc .stat-value { color: var(--inc); }
     .stat-card.cnt .stat-value { color: var(--ast); }
+    .stat-card.avg .stat-value { color: var(--exp); }
+    .stat-card.ratio .stat-value { color: var(--ast); }
+    .stat-sub.up   { color: var(--exp); }
+    .stat-sub.down { color: var(--inc); }
+    .ev-list { display: flex; flex-direction: column; gap: 8px; }
+    .ev-card { background: rgba(255,255,255,0.04); border-radius: var(--r); padding: 11px 13px;
+      display: flex; gap: 11px; align-items: flex-start; border-left: 3px solid rgba(255,255,255,0.15); }
+    .ev-card.good { border-left-color: var(--inc); }
+    .ev-card.bad  { border-left-color: var(--exp); }
+    .ev-card.neutral { border-left-color: var(--ast); }
+    .ev-icon { font-size: 19px; flex-shrink: 0; line-height: 1.2; }
+    .ev-title { font-size: 14px; font-weight: 600; }
+    .ev-card.good .ev-title { color: var(--inc); }
+    .ev-card.bad  .ev-title { color: var(--exp); }
+    .ev-detail { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
 
     /* ── Chart card ── */
     .chart-card {
@@ -393,10 +408,15 @@ function render(d) {
       '<div class="stat-value">' + fmt(d.summary.inc_month, cur) + '</div>' +
       '<div class="stat-sub">текущий месяц</div>' +
     '</div>' : '') +
-    '<div class="stat-card cnt">' +
-      '<div class="stat-label">Записей</div>' +
-      '<div class="stat-value">' + d.summary.total_entries + '</div>' +
-      '<div class="stat-sub">за период</div>' +
+    '<div class="stat-card avg">' +
+      '<div class="stat-label">Ср. расход / год</div>' +
+      '<div class="stat-value" id="sc-avg-val">—</div>' +
+      '<div class="stat-sub" id="sc-avg-sub">…</div>' +
+    '</div>' +
+    '<div class="stat-card ratio">' +
+      '<div class="stat-label">Расходы / доходы</div>' +
+      '<div class="stat-value" id="sc-ratio-val">—</div>' +
+      '<div class="stat-sub" id="sc-ratio-sub">…</div>' +
     '</div>';
   scroll.appendChild(cards);
 
@@ -509,6 +529,89 @@ function render(d) {
     });
     scroll.appendChild(tc.card);
   }
+
+  loadTrends();
+}
+
+function loadTrends() {
+  var scroll = document.getElementById('scroll');
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api/expense-trends?user_id=' + userId, true);
+  xhr.onload = function() {
+    if (xhr.status !== 200) return;
+    var d; try { d = JSON.parse(xhr.responseText); } catch (e) { return; }
+    var ms = d.months || []; if (!ms.length) return;
+    var labels = ms.map(function(m) { return m.label; });
+    var RED = 'rgba(240,79,106,0.8)', GRN = 'rgba(52,211,153,0.8)', GREY = 'rgba(136,136,170,0.5)';
+
+    // ── Заполняем верхние карточки текущими показателями ──
+    var last = ms[ms.length - 1];
+    function setSub(id, chg, unit) {
+      var el = document.getElementById(id); if (!el) return;
+      if (chg == null) { el.className = 'stat-sub'; el.textContent = 'за месяц'; return; }
+      var up = chg > 0;
+      el.className = 'stat-sub ' + (up ? 'up' : 'down');
+      el.textContent = (up ? '▲ +' : (chg < 0 ? '▼ ' : '')) + chg + unit + ' за месяц';
+    }
+    var av = document.getElementById('sc-avg-val'); if (av) av.textContent = fmt(last.avg_expense, 'RUB');
+    setSub('sc-avg-sub', last.avg_change_pct, '%');
+    var rv = document.getElementById('sc-ratio-val'); if (rv) rv.textContent = last.expense_ratio + '%';
+    setSub('sc-ratio-sub', last.ratio_change_pp, ' пп');
+
+    // 1) Среднемесячные расходы (скользящее среднее за год) + MoM динамика
+    var col1 = ms.map(function(m) { return m.avg_change_pct == null ? GREY : (m.avg_change_pct > 0 ? RED : GRN); });
+    var c1 = makeChartCard('СРЕДНЕМЕСЯЧНЫЕ РАСХОДЫ · скольз. за год · ₽', 220);
+    charts['avgexp'] = new Chart(c1.canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ data: ms.map(function(m) { return m.avg_expense; }),
+        backgroundColor: col1, borderRadius: 5, borderSkipped: false }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) {
+          var m = ms[ctx.dataIndex]; var s = fmt(m.avg_expense, 'RUB');
+          if (m.avg_change_pct != null) s += '  (' + (m.avg_change_pct > 0 ? '+' : '') + m.avg_change_pct + '% к пред. мес)';
+          return s; } } } },
+        scales: scaleOpts }
+    });
+    scroll.appendChild(c1.card);
+
+    // 2) Доля расходов от доходов + динамика
+    var col2 = ms.map(function(m) { return m.ratio_change_pp == null ? GREY : (m.ratio_change_pp > 0 ? RED : GRN); });
+    var c2 = makeChartCard('ДОЛЯ РАСХОДОВ ОТ ДОХОДОВ · %', 220);
+    charts['ratio'] = new Chart(c2.canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ data: ms.map(function(m) { return m.expense_ratio; }),
+        backgroundColor: col2, borderRadius: 5, borderSkipped: false }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) {
+          var m = ms[ctx.dataIndex]; var s = m.expense_ratio + '% дохода уходит на расходы';
+          if (m.ratio_change_pp != null) s += '  (' + (m.ratio_change_pp > 0 ? '+' : '') + m.ratio_change_pp + ' пп)';
+          return s; } } } },
+        scales: { x: scaleOpts.x, y: { grid: scaleOpts.y.grid,
+          ticks: { font: { size: 10 }, callback: function(v) { return v + '%'; } } } } }
+    });
+    scroll.appendChild(c2.card);
+
+    // ── События за месяц ──
+    var evs = d.events || [];
+    if (evs.length) {
+      var outer = document.createElement('div');
+      var card = document.createElement('div'); card.className = 'chart-card';
+      var ttl = document.createElement('div'); ttl.className = 'chart-title';
+      ttl.textContent = 'СОБЫТИЯ' + (d.period_label ? ' · ' + d.period_label.toUpperCase() : '');
+      card.appendChild(ttl);
+      var list = document.createElement('div'); list.className = 'ev-list';
+      evs.forEach(function(e) {
+        var c = document.createElement('div'); c.className = 'ev-card ' + (e.tone || 'neutral');
+        c.innerHTML = '<div class="ev-icon">' + (e.icon || '•') + '</div>' +
+          '<div><div class="ev-title">' + e.title + '</div>' +
+          '<div class="ev-detail">' + (e.detail || '') + '</div></div>';
+        list.appendChild(c);
+      });
+      card.appendChild(list); outer.appendChild(card);
+      scroll.appendChild(outer);
+    }
+  };
+  xhr.send();
 }
 
 function makeChartCard(title, height) {
