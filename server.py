@@ -679,6 +679,316 @@ async def assets_data(
     })
 
 
+@app.get("/api/asset-events")
+async def asset_events(user_id: int = Depends(require_user_id)):
+    """Авто-сводка «что повлияло на портфель за ~месяц» для страницы Активы."""
+    if not DB_PATH.exists():
+        return JSONResponse({"events": []})
+    con = get_db()
+    cur = con.cursor()
+
+    # Курсы: серия по каждому коду + последняя дата
+    cur.execute("SELECT currency_code AS code, rate_date AS d, CAST(rate_to_usd AS REAL) AS r "
+                "FROM currency_rates ORDER BY currency_code, rate_date")
+    series: dict[str, list] = {}
+    has_rates = False
+    for row in cur.fetchall():
+        series.setdefault(row["code"], []).append((row["d"], row["r"]))
+        has_rates = True
+    if not has_rates:
+        con.close()
+        return JSONResponse({"events": []})
+
+    # Окно: завершённый прошлый месяц по архивным срезам 1-го числа.
+    # now_d = начало текущего месяца (= конец прошлого), ago = начало прошлого месяца.
+    today_dt = datetime.now(timezone.utc)
+    ly, lm = today_dt.year, today_dt.month
+    now_d = f"{ly:04d}-{lm:02d}-01"
+    py, pm = (ly, lm - 1) if lm > 1 else (ly - 1, 12)
+    ago = f"{py:04d}-{pm:02d}-01"
+
+    def rate_at(code, iso):
+        v = None
+        for d, r in series.get(code, []):
+            if d <= iso:
+                v = r
+            else:
+                break
+        return v
+
+    def now_then(code):
+        return rate_at(code, now_d), rate_at(code, ago)
+
+    rub_now, rub_then = now_then("RUB")
+    if not rub_now or not rub_then:
+        con.close()
+        return JSONResponse({"events": []})
+
+    def pct(a, b):
+        return (a / b - 1) * 100 if a and b else 0
+
+    # Какие валюты реально лежат в НЕСКОЛЬКИХ категориях одновременно (по дедуп-таблице
+    # asset_latest_values). RUB — в Вклад/Инвесткопилка/Акции (3 пула) → считаем по (код+кат)
+    # и суммируем. USDT/USD/акции/крипта — в одной категории → по коду (перекладка между
+    # категориями = смена ярлыка, мержим историю, новыми деньгами не считаем).
+    cur.execute("SELECT currency_code AS code, COALESCE(category_name,'') AS cat "
+                "FROM asset_latest_values WHERE user_id=?", (user_id,))
+    code_cats: dict = {}
+    for r in cur.fetchall():
+        code_cats.setdefault(r["code"], set()).add(r["cat"])
+    multi = {code for code, cats in code_cats.items() if len(cats) > 1}
+
+    cur.execute("""
+        SELECT c.code AS code, COALESCE(cat.name,'') AS category,
+               date(e.created_at) AS d, CAST(e.amount AS REAL) AS qty
+        FROM entries e
+        JOIN currencies c ON c.id=e.currency_id
+        LEFT JOIN categories cat ON cat.id=e.category_id
+        WHERE e.mode='asset' AND e.user_id=?
+        ORDER BY c.code, e.created_at
+    """, (user_id,))
+    by_code: dict = {}      # ключ: code (single) или (code, category) для мультипула
+    stock_codes = set()
+    for r in cur.fetchall():
+        key = (r["code"], r["category"]) if r["code"] in multi else r["code"]
+        by_code.setdefault(key, []).append((r["d"], r["qty"]))
+        if r["category"] == "Акции":
+            stock_codes.add(r["code"])
+
+    def key_code(k):
+        return k[0] if isinstance(k, tuple) else k
+
+    def shares_at(series, iso):
+        q = 0.0
+        for d, v in series:
+            if d <= iso:
+                q = v
+            else:
+                break
+        return q
+
+    def price_rub(code, when):
+        if code == "RUB":
+            return 1.0
+        n, t = now_then(code)
+        r, rub = (n, rub_now) if when == "now" else (t, rub_then)
+        return r / rub if (r and rub) else None
+
+    def money(v):
+        return f"{round(v):,}".replace(",", " ")
+
+    # Сводный расчёт по всему портфелю: стоимость сейчас/месяц назад, рынок, пополнения
+    value_now = value_then = market = 0.0
+    held = set()
+    for key, hist in by_code.items():
+        code = key_code(key)
+        qn = shares_at(hist, now_d)
+        qt = shares_at(hist, ago)
+        if qn > 0:
+            held.add(code)
+        pn, pt = price_rub(code, "now"), price_rub(code, "then")
+        if pn is not None:
+            value_now += qn * pn
+        if pt is not None:
+            value_then += qt * pt
+        if pn is not None and pt is not None and code != "RUB":
+            market += qt * (pn - pt)
+    net_change = value_now - value_then
+    contributed = net_change - market
+
+    events = []
+
+    # A. Чистый прирост за месяц (с учётом пополнений, просадок и переоценки)
+    if value_then:
+        nch = net_change / value_then * 100
+        events.append({"icon": "📊", "tone": "good" if net_change >= 0 else "bad", "value": nch, "priority": 100,
+                       "title": f"Чистый прирост портфеля: {'+' if net_change >= 0 else '−'}{money(abs(net_change))} ₽",
+                       "detail": f"За месяц {nch:+.1f}% — с учётом пополнений, просадок и переоценки."})
+
+    # A2. Вложено новых денег (чистые пополнения; внутренние переводы взаимозачитываются)
+    if abs(contributed) >= 1000:
+        pos = contributed >= 0
+        events.append({"icon": "➕" if pos else "➖", "tone": "good" if pos else "neutral",
+                       "value": 0, "priority": 95,
+                       "title": f"{'Вложено' if pos else 'Выведено'} за месяц: {'+' if pos else '−'}{money(abs(contributed))} ₽",
+                       "detail": "Чистые пополнения портфеля за месяц."})
+
+    # A3. Рынок: переоценка активов за месяц (без операций)
+    if value_then and abs(market) >= 1000:
+        mch = market / value_then * 100
+        events.append({"icon": "💹", "tone": "good" if market >= 0 else "bad", "value": mch, "priority": 80,
+                       "title": f"Рынок {'добавил' if market >= 0 else 'забрал'} {'+' if market >= 0 else '−'}{money(abs(market))} ₽",
+                       "detail": f"Переоценка активов за месяц ({mch:+.1f}%), без учёта пополнений."})
+
+    # B. Рубль к доллару
+    rub_ch = pct(rub_now, rub_then)
+    if abs(rub_ch) >= 0.5:
+        events.append({"icon": "🇷🇺", "tone": "neutral", "value": rub_ch, "priority": 50,
+                       "title": f"Рубль {'укрепился' if rub_ch >= 0 else 'ослаб'} на {abs(rub_ch):.1f}% к доллару",
+                       "detail": "Меняет рублёвую стоимость валютных и крипто-активов."})
+
+    # C. Крипта — одной карточкой: общий % в $ + разбивка по монетам
+    CRYPTO = {"BTC": "BTC", "ETH": "ETH", "SOL": "SOL", "TRX": "TRX"}
+    cval_now = cval_then = 0.0
+    coin_moves = []
+    for code in CRYPTO:
+        if code not in held:
+            continue
+        qn = by_code[code][-1][1]
+        n, t = now_then(code)
+        if n:
+            cval_now += qn * n
+        if t:
+            cval_then += qn * t
+        if n and t:
+            coin_moves.append((CRYPTO[code], pct(n, t)))
+    if cval_then and coin_moves:
+        cch = pct(cval_now, cval_then)
+        if abs(cch) >= 5:                                   # порог ±5%
+            coin_moves.sort(key=lambda x: x[1])
+            parts = ", ".join(f"{c} {m:+.0f}%" for c, m in coin_moves)
+            events.append({"icon": "🪙", "tone": "good" if cch >= 0 else "bad", "value": cch, "priority": 20,
+                           "title": f"Крипта {'выросла' if cch >= 0 else 'просела'} на {abs(cch):.0f}% за месяц",
+                           "detail": f"В долларах: {parts}."})
+
+    # D0. Акции — общая плашка движения (порог ±5%)
+    sval_now = sval_then = 0.0
+    for code in stock_codes:
+        if code not in held or code in ("RUB", "TRUR"):
+            continue
+        qn = shares_at(by_code[code], now_d)
+        pn, pt = price_rub(code, "now"), price_rub(code, "then")
+        if pn:
+            sval_now += qn * pn
+        if pt:
+            sval_then += qn * pt
+    if sval_then:
+        sch = pct(sval_now, sval_then)
+        if abs(sch) >= 5:
+            events.append({"icon": "🏛", "tone": "good" if sch >= 0 else "bad", "value": sch, "priority": 25,
+                           "title": f"Акции {'выросли' if sch >= 0 else 'просели'} на {abs(sch):.0f}% за месяц",
+                           "detail": "Совокупная переоценка акций портфеля за месяц."})
+
+    # D. Топ-гейнер / топ-лузер среди акций
+    moves = []
+    for code in stock_codes:
+        if code not in held or code in ("RUB", "TRUR"):
+            continue
+        pn, pt = price_rub(code, "now"), price_rub(code, "then")
+        if pn and pt:
+            moves.append((code, pct(pn, pt)))
+    if moves:
+        moves.sort(key=lambda x: x[1])
+        worst, best = moves[0], moves[-1]
+        if best[1] >= 3:
+            events.append({"icon": "📈", "tone": "good", "value": best[1], "priority": 5,
+                           "title": f"Лучшая бумага: {best[0]} {best[1]:+.0f}%", "detail": "Рост за месяц."})
+        if worst[1] <= -3 and worst[0] != best[0]:
+            events.append({"icon": "📉", "tone": "bad", "value": worst[1], "priority": 5,
+                           "title": f"Слабее всех: {worst[0]} {worst[1]:+.0f}%", "detail": "Снижение за месяц."})
+
+    # E. Дивиденды/проценты за прошлый месяц
+    prev_m = (datetime(ly, lm, 1) - timedelta(days=1)).strftime("%Y-%m")
+    cur.execute("""
+        SELECT cat.name AS name, CAST(e.amount AS REAL) AS amt, c.code AS code
+        FROM entries e LEFT JOIN categories cat ON cat.id=e.category_id
+        JOIN currencies c ON c.id=e.currency_id
+        WHERE e.user_id=? AND e.mode='income' AND strftime('%Y-%m', e.created_at)=?
+    """, (user_id, prev_m))
+    KW = ("дивиденд", "купон", "процент", "рент")
+    div_sum = 0.0
+    for r in cur.fetchall():
+        if any(k in (r["name"] or "").lower() for k in KW):
+            rr = now_then(r["code"])[0] or 0
+            div_sum += r["amt"] if r["code"] == "RUB" else r["amt"] * rr / rub_now
+    if div_sum >= 1:
+        events.append({"icon": "💰", "tone": "good", "value": 0, "priority": 30,
+                       "title": f"Дивиденды и проценты: {money(div_sum)} ₽",
+                       "detail": f"Поступило за {prev_m}."})
+
+    # ── Помесячная ретроспектива: рынок (±) и пополнения, до последнего завершённого месяца ──
+    def price_at(code, iso):
+        if code == "RUB":
+            return 1.0
+        r, rub = rate_at(code, iso), rate_at("RUB", iso)
+        return r / rub if (r and rub) else None
+
+    def period_stats(then_iso, now_iso):
+        vn = vt = mk = 0.0
+        drivers = []   # (code, market_i) для пояснений
+        for key, h in by_code.items():
+            code = key_code(key)
+            qn, qt = shares_at(h, now_iso), shares_at(h, then_iso)
+            pn, pt = price_at(code, now_iso), price_at(code, then_iso)
+            if pn is not None:
+                vn += qn * pn
+            if pt is not None:
+                vt += qt * pt
+            if pn is not None and pt is not None and code != "RUB":
+                mi = qt * (pn - pt)
+                mk += mi
+                if abs(mi) >= 1:
+                    drivers.append((code, mi))
+        drivers.sort(key=lambda x: abs(x[1]), reverse=True)
+        return vn, vt, mk, drivers
+
+    def short(v):
+        a = abs(round(v))
+        if a >= 1_000_000:
+            return f"{a/1_000_000:.1f}".rstrip("0").rstrip(".") + " млн"
+        if a >= 1000:
+            return f"{round(a/1000)}к"
+        return str(a)
+
+    # Доходы по месяцам (зарплата/премия/… — поясняют пополнения)
+    cur.execute("""
+        SELECT strftime('%Y-%m', e.created_at) AS m, COALESCE(cat.name, 'Доход') AS name,
+               c.code AS code, SUM(CAST(e.amount AS REAL)) AS amt
+        FROM entries e LEFT JOIN categories cat ON cat.id=e.category_id
+        JOIN currencies c ON c.id=e.currency_id
+        WHERE e.mode='income' AND e.user_id=?
+        GROUP BY m, name, c.code
+    """, (user_id,))
+    income_by_month: dict = {}
+    for r in cur.fetchall():
+        rub = rate_at("RUB", r["m"] + "-28")
+        rr = rate_at(r["code"], r["m"] + "-28")
+        val = r["amt"] if r["code"] == "RUB" else (r["amt"] * rr / rub if rr and rub else 0)
+        income_by_month.setdefault(r["m"], []).append((r["name"], val))
+
+    all_dates = [d for s in by_code.values() for d, _ in s]
+    monthly = []
+    if all_dates:
+        yy, mm = int(min(all_dates)[:4]), int(min(all_dates)[5:7])
+        while (yy, mm) <= (py, pm):
+            month = f"{yy:04d}-{mm:02d}"
+            m_then = f"{month}-01"
+            ny, nm = (yy, mm + 1) if mm < 12 else (yy + 1, 1)
+            vn, vt, mk, drivers = period_stats(m_then, f"{ny:04d}-{nm:02d}-01")
+            if vt > 0:
+                # пояснение рынка: топ-активы + курс рубля
+                rt, rn = rate_at("RUB", m_then), rate_at("RUB", f"{ny:04d}-{nm:02d}-01")
+                rubmv = (rn / rt - 1) * 100 if rt and rn else 0
+                mp = [f"{c} {'+' if v >= 0 else '−'}{short(v)}" for c, v in drivers[:2]]
+                if abs(rubmv) >= 2:
+                    mp.append(f"рубль {rubmv:+.0f}%")
+                # пояснение пополнений: топ доходов месяца
+                inc = sorted(income_by_month.get(month, []), key=lambda x: -x[1])
+                ip = [f"{n} {short(v)}" for n, v in inc[:3] if v >= 10000]
+                monthly.append({"month": month, "market": round(mk),
+                                "contributed": round((vn - vt) - mk),
+                                "market_note": ", ".join(mp), "income_note": ", ".join(ip)})
+            yy, mm = ny, nm
+
+    con.close()
+    events.sort(key=lambda e: (e["priority"], abs(e["value"])), reverse=True)
+    MONTHS_FULL = ["", "январь", "февраль", "март", "апрель", "май", "июнь",
+                   "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
+    return JSONResponse({"period_from": ago, "period_to": now_d,
+                         "period_label": f"{MONTHS_FULL[pm]} {py}",
+                         "events": events, "monthly": monthly})
+
+
 @app.get("/model")
 async def model_page():
     return FileResponse(WEB_DIR / "model.html")

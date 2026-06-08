@@ -267,6 +267,23 @@
   .confirm-text { font-size: 14px; color: var(--sub); margin-bottom: 20px; line-height: 1.5; }
 
   /* ── Bottom nav ── */
+  /* События за месяц */
+  .events-list { display: flex; flex-direction: column; gap: 8px; }
+  .event-card {
+    background: var(--card); border-radius: 12px; padding: 12px 14px;
+    display: flex; gap: 11px; align-items: flex-start;
+    border-left: 3px solid var(--border);
+  }
+  .event-card.good { border-left-color: var(--green); }
+  .event-card.bad  { border-left-color: var(--red); }
+  .event-card.neutral { border-left-color: var(--accent); }
+  .event-icon { font-size: 20px; line-height: 1.2; flex-shrink: 0; }
+  .event-body { flex: 1; min-width: 0; }
+  .event-title { font-size: 14px; font-weight: 600; }
+  .event-card.good .event-title { color: var(--green); }
+  .event-card.bad  .event-title { color: var(--red); }
+  .event-detail { font-size: 12px; color: var(--sub); margin-top: 3px; line-height: 1.4; }
+
   .bottom-nav {
     position: fixed;
     bottom: 0; left: 0; right: 0;
@@ -427,6 +444,25 @@
     <div class="positions-list" id="positions-list"></div>
   </div>
 
+  <!-- Рынок и пополнения по месяцам -->
+  <div class="section" id="monthly-section" style="display:none">
+    <div class="section-title">Рынок и пополнения по месяцам</div>
+    <div class="chart-card"><canvas id="monthly-chart"></canvas>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--sub);margin-top:8px">
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#4ade80;vertical-align:middle"></span> рынок прибавил</span>
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#f87171;vertical-align:middle"></span> рынок забрал</span>
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(136,136,170,.45);vertical-align:middle"></span> вложено</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- События за месяц -->
+  <div class="section" id="events-section" style="display:none">
+    <div class="section-title">События за месяц</div>
+    <div id="events-period" style="font-size:11px;color:var(--sub);margin:-4px 0 10px"></div>
+    <div class="events-list" id="events-list"></div>
+  </div>
+
 </div>
 
 <!-- Модал редактирования -->
@@ -539,6 +575,76 @@ async function load() {
   document.getElementById('content').classList.remove('hidden');
 
   render(data);
+  loadEvents();
+}
+
+let _monthlyChart = null;
+const MONTHS_RU = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+
+async function loadEvents() {
+  const evSec = document.getElementById('events-section');
+  const moSec = document.getElementById('monthly-section');
+  const list = document.getElementById('events-list');
+  try {
+    const res = await fetch(`/api/asset-events?user_id=${userId}`);
+    const data = await res.json();
+
+    // карточки событий
+    const events = data.events || [];
+    if (events.length) {
+      list.innerHTML = '';
+      for (const e of events) {
+        const div = document.createElement('div');
+        div.className = 'event-card ' + (e.tone || 'neutral');
+        div.innerHTML =
+          `<div class="event-icon">${e.icon || '•'}</div>` +
+          `<div class="event-body"><div class="event-title">${e.title}</div>` +
+          `<div class="event-detail">${e.detail || ''}</div></div>`;
+        list.appendChild(div);
+      }
+      if (data.period_label) {
+        document.getElementById('events-period').textContent =
+          'За ' + data.period_label + ' (завершённый месяц)';
+      }
+      evSec.style.display = '';
+    } else { evSec.style.display = 'none'; }
+
+    // гистограмма «рынок ± и пополнения» по месяцам
+    const months = data.monthly || [];
+    if (months.length) {
+      const labels = months.map(m => MONTHS_RU[+m.month.slice(5,7)-1] + ' ' + m.month.slice(2,4));
+      const mkt = months.map(m => m.market);
+      const inv = months.map(m => m.contributed);
+      const mktColors = mkt.map(v => v >= 0 ? 'rgba(74,222,128,0.85)' : 'rgba(248,113,113,0.85)');
+      const fmtY = v => { const a = Math.abs(v); return a >= 1e6 ? (v/1e6).toFixed(1)+' млн' : a >= 1e3 ? Math.round(v/1e3)+'к' : v; };
+      if (_monthlyChart) _monthlyChart.destroy();
+      _monthlyChart = new Chart(document.getElementById('monthly-chart'), {
+        type: 'bar',
+        data: { labels, datasets: [
+          { label: 'Вложено', data: inv, backgroundColor: 'rgba(136,136,170,0.4)', borderRadius: 4 },
+          { label: 'Рынок', data: mkt, backgroundColor: mktColors, borderRadius: 4 },
+        ]},
+        options: { responsive: true, maintainAspectRatio: true, animation: { duration: 300 },
+          plugins: { legend: { display: false }, tooltip: { callbacks: {
+            label: c => c.dataset.label + ': ' + (c.parsed.y >= 0 ? '+' : '−') +
+              new Intl.NumberFormat('ru').format(Math.abs(Math.round(c.parsed.y))) + ' ₽',
+            afterBody: items => {
+              const m = months[items[0].dataIndex]; const lines = [];
+              if (m.market_note) lines.push('↳ рынок: ' + m.market_note);
+              if (m.income_note) lines.push('↳ доход: ' + m.income_note);
+              return lines;
+            } }}},
+          scales: { x: { ticks: { color: '#8888aa', font: { size: 10 } }, grid: { display: false } },
+            y: { ticks: { color: '#8888aa', font: { size: 10 }, callback: fmtY },
+                 grid: { color: 'rgba(255,255,255,0.05)' } } } }
+      });
+      moSec.style.display = '';
+    } else { moSec.style.display = 'none'; }
+  } catch (err) {
+    evSec.style.display = 'none';
+    moSec.style.display = 'none';
+    console.error('events failed', err);
+  }
 }
 
 function fmtMonths(m) {
