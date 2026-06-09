@@ -24,7 +24,16 @@ import update_daily_rates
 import update_monthly_rates
 import db_repo
 import fin_model_data
+import metrics
+from metrics import load_historical_rates, convert_h, avg_monthly_expense
 from tg_auth import require_user_id
+
+# Символы валют для форматирования сумм в событиях
+CUR_SYM = {"RUB": "₽", "USD": "$", "USDT": "$", "VND": "₫", "EUR": "€", "THB": "฿", "MYR": "RM"}
+
+
+def _sym(code: str) -> str:
+    return CUR_SYM.get(code, code)
 
 WEB_DIR = Path(__file__).parent / "web"
 DB_PATH = Path(__file__).parent / "data" / "app.db"
@@ -123,40 +132,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
-
-
-def load_historical_rates(con) -> dict:
-    """
-    Загружает все курсы из currency_rates в словарь {(code, 'YYYY-MM'): rate_to_usd}.
-    Если в одном месяце несколько записей — берём среднее.
-    """
-    cur = con.cursor()
-    cur.execute("""
-        SELECT currency_code, strftime('%Y-%m', rate_date) as month,
-               AVG(CAST(rate_to_usd AS REAL)) as avg_rate
-        FROM currency_rates
-        GROUP BY currency_code, month
-    """)
-    return {(r["currency_code"], r["month"]): r["avg_rate"] for r in cur.fetchall()}
-
-
-def convert_h(
-    amount: float, src: str, dst: str, month: str,
-    hist_rates: dict, curr_rates: dict,
-) -> float:
-    """
-    Конвертация с учётом исторического курса месяца транзакции.
-    - hist_rates: {(code, 'YYYY-MM'): rate_to_usd} — из currency_rates в БД
-    - curr_rates: {code: rate_to_usd} — актуальные (fallback)
-    Оба курса (src и dst) берутся за один месяц → суммы «в ценах того времени».
-    """
-    if src == dst:
-        return amount
-    src_r = hist_rates.get((src, month)) or curr_rates.get(src, 0)
-    dst_r = hist_rates.get((dst, month)) or curr_rates.get(dst, 0)
-    if not src_r or not dst_r:
-        return 0.0
-    return amount * src_r / dst_r
 
 
 class EntryCreate(BaseModel):
@@ -613,23 +588,16 @@ async def assets_data(
             "value": round(snap_total, 2),
         })
 
-    # ── Runway: сколько месяцев можно прожить ──
+    # ── Финансовый запас: сколько месяцев проживём на ЛИКВИДНОСТИ ──
+    # Считаем только по категории «Ликвидность» (не по всему капиталу — акции/крипта
+    # волатильны и не предназначены для проедания). Среднемесячные расходы — единый
+    # централизованный расчёт (metrics.avg_monthly_expense), как на аналитике/в фин-модели.
     since_1y = (now - timedelta(days=365)).strftime("%Y-%m-%d")
-    cur.execute("""
-        SELECT strftime('%Y-%m', e.created_at) as month,
-               CAST(e.amount AS REAL) as amt, c.code
-        FROM entries e JOIN currencies c ON c.id=e.currency_id
-        WHERE e.user_id=? AND e.mode='expense'
-          AND date(e.created_at) >= ?
-    """, (user_id, since_1y))
-    exp_by_month: dict[str, float] = {}
-    for r in cur.fetchall():
-        m = r["month"]
-        exp_by_month[m] = exp_by_month.get(m, 0) + _conv(r["amt"], r["code"], currency, m)
-
-    n_months = len(exp_by_month)
-    avg_monthly_expense = sum(exp_by_month.values()) / n_months if n_months else 0
-    runway_months = round(total_value / avg_monthly_expense, 1) if avg_monthly_expense else None
+    LIQUID_CATEGORIES = {"Ликвидность"}
+    liquid_value = sum(p["value"] for p in positions if p["category"] in LIQUID_CATEGORIES)
+    exp_metric = avg_monthly_expense(con, user_id, currency, curr_rates, hist_rates)
+    avg_exp = exp_metric["avg"]
+    runway_months = round(liquid_value / avg_exp, 1) if avg_exp else None
 
     # ── Пассивный доход ──
     PASSIVE_KEYWORDS = ("процент", "дивиденд", "купон", "рент", "аренд", "пассив", "роялт", "кэшбэк")
@@ -668,8 +636,9 @@ async def assets_data(
         "timeline": timeline,
         "runway": {
             "months": runway_months,
-            "avg_monthly_expense": round(avg_monthly_expense, 2),
-            "expense_months_count": n_months,
+            "avg_monthly_expense": round(avg_exp, 2),
+            "expense_months_count": exp_metric["months_count"],
+            "liquid_value": round(liquid_value, 2),
         },
         "passive_income": {
             "this_month": round(passive_this_month, 2),
@@ -680,10 +649,15 @@ async def assets_data(
 
 
 @app.get("/api/asset-events")
-async def asset_events(user_id: int = Depends(require_user_id)):
-    """Авто-сводка «что повлияло на портфель за ~месяц» для страницы Активы."""
+async def asset_events(
+    user_id: int = Depends(require_user_id),
+    currency: str = Query("RUB"),
+):
+    """Авто-сводка «что повлияло на портфель за ~месяц» для страницы Активы.
+    Все суммы — в валюте `currency` (по умолчанию RUB)."""
     if not DB_PATH.exists():
         return JSONResponse({"events": []})
+    SYM = _sym(currency)
     con = get_db()
     cur = con.cursor()
 
@@ -720,7 +694,8 @@ async def asset_events(user_id: int = Depends(require_user_id)):
         return rate_at(code, now_d), rate_at(code, ago)
 
     rub_now, rub_then = now_then("RUB")
-    if not rub_now or not rub_then:
+    cur_now, cur_then = now_then(currency)
+    if not rub_now or not rub_then or not cur_now or not cur_then:
         con.close()
         return JSONResponse({"events": []})
 
@@ -767,12 +742,13 @@ async def asset_events(user_id: int = Depends(require_user_id)):
                 break
         return q
 
+    # Цена 1 единицы `code` в выбранной валюте на момент now/then.
     def price_rub(code, when):
-        if code == "RUB":
+        if code == currency:
             return 1.0
         n, t = now_then(code)
-        r, rub = (n, rub_now) if when == "now" else (t, rub_then)
-        return r / rub if (r and rub) else None
+        r, base = (n, cur_now) if when == "now" else (t, cur_then)
+        return r / base if (r and base) else None
 
     def money(v):
         return f"{round(v):,}".replace(",", " ")
@@ -791,7 +767,7 @@ async def asset_events(user_id: int = Depends(require_user_id)):
             value_now += qn * pn
         if pt is not None:
             value_then += qt * pt
-        if pn is not None and pt is not None and code != "RUB":
+        if pn is not None and pt is not None and code != currency:
             market += qt * (pn - pt)
     net_change = value_now - value_then
     contributed = net_change - market
@@ -802,7 +778,7 @@ async def asset_events(user_id: int = Depends(require_user_id)):
     if value_then:
         nch = net_change / value_then * 100
         events.append({"icon": "📊", "tone": "good" if net_change >= 0 else "bad", "value": nch, "priority": 100,
-                       "title": f"Чистый прирост портфеля: {'+' if net_change >= 0 else '−'}{money(abs(net_change))} ₽",
+                       "title": f"Чистый прирост портфеля: {'+' if net_change >= 0 else '−'}{money(abs(net_change))} {SYM}",
                        "detail": f"За месяц {nch:+.1f}% — с учётом пополнений, просадок и переоценки."})
 
     # A2. Вложено новых денег (чистые пополнения; внутренние переводы взаимозачитываются)
@@ -810,14 +786,14 @@ async def asset_events(user_id: int = Depends(require_user_id)):
         pos = contributed >= 0
         events.append({"icon": "➕" if pos else "➖", "tone": "good" if pos else "neutral",
                        "value": 0, "priority": 95,
-                       "title": f"{'Вложено' if pos else 'Выведено'} за месяц: {'+' if pos else '−'}{money(abs(contributed))} ₽",
+                       "title": f"{'Вложено' if pos else 'Выведено'} за месяц: {'+' if pos else '−'}{money(abs(contributed))} {SYM}",
                        "detail": "Чистые пополнения портфеля за месяц."})
 
     # A3. Рынок: переоценка активов за месяц (без операций)
     if value_then and abs(market) >= 1000:
         mch = market / value_then * 100
         events.append({"icon": "💹", "tone": "good" if market >= 0 else "bad", "value": mch, "priority": 80,
-                       "title": f"Рынок {'добавил' if market >= 0 else 'забрал'} {'+' if market >= 0 else '−'}{money(abs(market))} ₽",
+                       "title": f"Рынок {'добавил' if market >= 0 else 'забрал'} {'+' if market >= 0 else '−'}{money(abs(market))} {SYM}",
                        "detail": f"Переоценка активов за месяц ({mch:+.1f}%), без учёта пополнений."})
 
     # B. Рубль к доллару
@@ -899,19 +875,20 @@ async def asset_events(user_id: int = Depends(require_user_id)):
     div_sum = 0.0
     for r in cur.fetchall():
         if any(k in (r["name"] or "").lower() for k in KW):
-            rr = now_then(r["code"])[0] or 0
-            div_sum += r["amt"] if r["code"] == "RUB" else r["amt"] * rr / rub_now
+            p = price_rub(r["code"], "now")
+            if p is not None:
+                div_sum += r["amt"] * p
     if div_sum >= 1:
         events.append({"icon": "💰", "tone": "good", "value": 0, "priority": 30,
-                       "title": f"Дивиденды и проценты: {money(div_sum)} ₽",
+                       "title": f"Дивиденды и проценты: {money(div_sum)} {SYM}",
                        "detail": f"Поступило за {prev_m}."})
 
     # ── Помесячная ретроспектива: рынок (±) и пополнения, до последнего завершённого месяца ──
     def price_at(code, iso):
-        if code == "RUB":
+        if code == currency:
             return 1.0
-        r, rub = rate_at(code, iso), rate_at("RUB", iso)
-        return r / rub if (r and rub) else None
+        r, base = rate_at(code, iso), rate_at(currency, iso)
+        return r / base if (r and base) else None
 
     def period_stats(then_iso, now_iso):
         vn = vt = mk = 0.0
@@ -924,7 +901,7 @@ async def asset_events(user_id: int = Depends(require_user_id)):
                 vn += qn * pn
             if pt is not None:
                 vt += qt * pt
-            if pn is not None and pt is not None and code != "RUB":
+            if pn is not None and pt is not None and code != currency:
                 mi = qt * (pn - pt)
                 mk += mi
                 if abs(mi) >= 1:
@@ -951,9 +928,9 @@ async def asset_events(user_id: int = Depends(require_user_id)):
     """, (user_id,))
     income_by_month: dict = {}
     for r in cur.fetchall():
-        rub = rate_at("RUB", r["m"] + "-28")
+        base = rate_at(currency, r["m"] + "-28")
         rr = rate_at(r["code"], r["m"] + "-28")
-        val = r["amt"] if r["code"] == "RUB" else (r["amt"] * rr / rub if rr and rub else 0)
+        val = r["amt"] if r["code"] == currency else (r["amt"] * rr / base if rr and base else 0)
         income_by_month.setdefault(r["m"], []).append((r["name"], val))
 
     all_dates = [d for s in by_code.values() for d, _ in s]
@@ -985,7 +962,7 @@ async def asset_events(user_id: int = Depends(require_user_id)):
     MONTHS_FULL = ["", "январь", "февраль", "март", "апрель", "май", "июнь",
                    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
     return JSONResponse({"period_from": ago, "period_to": now_d,
-                         "period_label": f"{MONTHS_FULL[pm]} {py}",
+                         "period_label": f"{MONTHS_FULL[pm]} {py}", "currency": currency,
                          "events": events, "monthly": monthly})
 
 
@@ -1273,11 +1250,15 @@ async def analytics_data(
 
 
 @app.get("/api/expense-trends")
-async def expense_trends(user_id: int = Depends(require_user_id)):
-    """Тренды для аналитики (в RUB, по завершённым месяцам, скользящее окно ≤12 мес):
+async def expense_trends(
+    user_id: int = Depends(require_user_id),
+    currency: str = Query("RUB"),
+):
+    """Тренды для аналитики (в валюте `currency`, по завершённым месяцам, окно ≤12 мес):
     1) среднемесячные расходы и их MoM-динамика; 2) доля расходов от доходов."""
     if not DB_PATH.exists():
         return JSONResponse({"months": []})
+    SYM = _sym(currency)
     curr_rates = get_rates_to_usd()
     con = get_db()
     hist_rates = load_historical_rates(con)
@@ -1295,7 +1276,7 @@ async def expense_trends(user_id: int = Depends(require_user_id)):
     exp_cat: dict[str, dict] = {}   # month -> {категория: rub}
     inc_cat: dict[str, dict] = {}
     for r in cur.fetchall():
-        v = convert_h(r["amt"], r["code"], "RUB", r["m"], hist_rates, curr_rates)
+        v = convert_h(r["amt"], r["code"], currency, r["m"], hist_rates, curr_rates)
         if r["mode"] == "expense":
             exp[r["m"]] = exp.get(r["m"], 0) + v
             exp_cat.setdefault(r["m"], {})[r["cat"]] = exp_cat.setdefault(r["m"], {}).get(r["cat"], 0) + v
@@ -1348,12 +1329,12 @@ async def expense_trends(user_id: int = Depends(require_user_id)):
             dpct = (eM / avg - 1) * 100
             below = eM <= avg
             events.append({"icon": "💸", "tone": "good" if below else "bad",
-                           "title": f"Расходы за {ml}: {money(eM)} ₽",
-                           "detail": f"На {abs(dpct):.0f}% {'ниже' if below else 'выше'} среднего за год ({money(avg)} ₽)."})
+                           "title": f"Расходы за {ml}: {money(eM)} {SYM}",
+                           "detail": f"На {abs(dpct):.0f}% {'ниже' if below else 'выше'} среднего за год ({money(avg)} {SYM})."})
         if iM:
             top_inc = sorted(inc_cat.get(M, {}).items(), key=lambda x: -x[1])[:2]
             events.append({"icon": "💰", "tone": "good",
-                           "title": f"Доход за {ml}: {money(iM)} ₽",
+                           "title": f"Доход за {ml}: {money(iM)} {SYM}",
                            "detail": ", ".join(f"{n} {money(v)}" for n, v in top_inc if v >= 1000) or "—"})
         if iM:
             ratioM = eM / iM * 100
@@ -1364,7 +1345,7 @@ async def expense_trends(user_id: int = Depends(require_user_id)):
         if cats and eM:
             c, a = cats[0]
             events.append({"icon": "🛒", "tone": "neutral",
-                           "title": f"Крупнейшая статья: {c} — {money(a)} ₽",
+                           "title": f"Крупнейшая статья: {c} — {money(a)} {SYM}",
                            "detail": f"{a / eM * 100:.0f}% расходов месяца."})
         if prevM:
             allc = set(exp_cat.get(M, {})) | set(exp_cat.get(prevM, {}))
@@ -1373,7 +1354,8 @@ async def expense_trends(user_id: int = Depends(require_user_id)):
             if diffs and diffs[0][1] >= 15000:
                 c, d = diffs[0]
                 events.append({"icon": "📈", "tone": "bad",
-                               "title": f"Выросли траты: {c} +{money(d)} ₽",
+                               "title": f"Выросли траты: {c} +{money(d)} {SYM}",
                                "detail": f"Было {money(exp_cat.get(prevM, {}).get(c, 0))}, стало {money(exp_cat.get(M, {}).get(c, 0))}."})
 
-    return JSONResponse({"months": out[-12:], "events": events, "period_label": period_label})
+    return JSONResponse({"months": out[-12:], "events": events,
+                         "period_label": period_label, "currency": currency})

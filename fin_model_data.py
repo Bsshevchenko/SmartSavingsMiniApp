@@ -24,6 +24,8 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import metrics
+
 log = logging.getLogger(__name__)
 
 # macOS-сборки Python иногда без CA-бандла → CERTIFICATE_VERIFY_FAILED.
@@ -266,44 +268,13 @@ def build_fin_model(user_id: int, db_path: Path = DB_PATH, cache_path: Path = CA
         prices_rub[code] = round(r2usd / rub_usd, 4)
         price_date = rdate
 
-    # Помесячный средний исторический курс (как на аналитике) — расходы конвертируем по
-    # курсу того месяца, когда они были, а не по текущему.
-    cur.execute("""
-        SELECT currency_code AS code, strftime('%Y-%m', rate_date) AS month,
-               AVG(CAST(rate_to_usd AS REAL)) AS r
-        FROM currency_rates GROUP BY code, month
-    """)
-    hist_avg: dict = {}
-    for r in cur.fetchall():
-        hist_avg[(r["code"], r["month"])] = r["r"]
+    # Средние месячные расходы — ЕДИНЫЙ централизованный расчёт (metrics): по завершённым
+    # месяцам в RUB, скользящее окно ≤12 мес, исторический курс месяца. Та же цифра, что
+    # на странице аналитики и в финзапасе на активах.
     code_to_usd = {c: v[0] for c, v in rate_to_usd.items()}
-
-    def to_rub(amt, code, month):
-        if code == "RUB":
-            return amt
-        src = hist_avg.get((code, month)) or code_to_usd.get(code)
-        rub = hist_avg.get(("RUB", month)) or rub_usd
-        return amt * src / rub if (src and rub) else 0.0
-
-    # Средние месячные расходы за 12 мес (этого пользователя)
-    since = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
-    cur.execute("""
-        SELECT strftime('%Y-%m', e.created_at) AS month,
-               CAST(e.amount AS REAL) AS amt, c.code AS code
-        FROM entries e JOIN currencies c ON c.id=e.currency_id
-        WHERE e.user_id=? AND e.mode='expense' AND date(e.created_at) >= ?
-    """, (user_id, since))
-    exp_by_month: dict[str, float] = {}
-    for r in cur.fetchall():
-        exp_by_month[r["month"]] = exp_by_month.get(r["month"], 0) + to_rub(r["amt"], r["code"], r["month"])
-    # Среднее — только по ЗАВЕРШЁННЫМ месяцам: исключаем текущий (неполный) и самый ранний
-    # (онбординг, обычно неполный); берём скользящее окно ≤12 мес. Иначе среднее занижено.
-    _this_m = today[:7]
-    _completed = sorted(m for m in exp_by_month if m < _this_m)
-    if len(_completed) > 1:
-        _completed = _completed[1:]
-    _window = _completed[-12:]
-    avg_expenses = round(sum(exp_by_month[m] for m in _window) / len(_window)) if _window else 0
+    _exp = metrics.avg_monthly_expense(con, user_id, "RUB", code_to_usd)
+    avg_expenses = _exp["avg"]
+    exp_by_month = _exp["by_month"]
 
     # Все исторические курсы
     cur.execute("SELECT currency_code AS code, rate_date AS d, rate_to_usd AS r FROM currency_rates")

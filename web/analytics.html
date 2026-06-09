@@ -266,8 +266,8 @@
       </div>
     </div>
     <div id="currency-tabs">
-      <button class="cur-btn" data-c="RUB" onclick="setCurrency('RUB')">₽ RUB</button>
-      <button class="cur-btn active" data-c="VND" onclick="setCurrency('VND')">₫ VND</button>
+      <button class="cur-btn active" data-c="RUB" onclick="setCurrency('RUB')">₽ RUB</button>
+      <button class="cur-btn" data-c="VND" onclick="setCurrency('VND')">₫ VND</button>
       <button class="cur-btn" data-c="USD" onclick="setCurrency('USD')">$ USD</button>
     </div>
   </div>
@@ -319,7 +319,7 @@ var tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 
 var currentPeriod = '6m';
-var currentCurrency = 'VND';
+var currentCurrency = 'RUB';
 var userId = null;
 var charts = {};
 
@@ -536,11 +536,12 @@ function render(d) {
 function loadTrends() {
   var scroll = document.getElementById('scroll');
   var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/api/expense-trends?user_id=' + userId, true);
+  xhr.open('GET', '/api/expense-trends?user_id=' + userId + '&currency=' + currentCurrency, true);
   xhr.onload = function() {
     if (xhr.status !== 200) return;
     var d; try { d = JSON.parse(xhr.responseText); } catch (e) { return; }
     var ms = d.months || []; if (!ms.length) return;
+    var cur = d.currency || currentCurrency;
     var labels = ms.map(function(m) { return m.label; });
     var RED = 'rgba(240,79,106,0.8)', GRN = 'rgba(52,211,153,0.8)', GREY = 'rgba(136,136,170,0.5)';
 
@@ -553,21 +554,21 @@ function loadTrends() {
       el.className = 'stat-sub ' + (up ? 'up' : 'down');
       el.textContent = (up ? '▲ +' : (chg < 0 ? '▼ ' : '')) + chg + unit + ' за месяц';
     }
-    var av = document.getElementById('sc-avg-val'); if (av) av.textContent = fmt(last.avg_expense, 'RUB');
+    var av = document.getElementById('sc-avg-val'); if (av) av.textContent = fmt(last.avg_expense, cur);
     setSub('sc-avg-sub', last.avg_change_pct, '%');
     var rv = document.getElementById('sc-ratio-val'); if (rv) rv.textContent = last.expense_ratio + '%';
     setSub('sc-ratio-sub', last.ratio_change_pp, ' пп');
 
     // 1) Среднемесячные расходы (скользящее среднее за год) + MoM динамика
     var col1 = ms.map(function(m) { return m.avg_change_pct == null ? GREY : (m.avg_change_pct > 0 ? RED : GRN); });
-    var c1 = makeChartCard('СРЕДНЕМЕСЯЧНЫЕ РАСХОДЫ · скольз. за год · ₽', 220);
+    var c1 = makeChartCard('СРЕДНЕМЕСЯЧНЫЕ РАСХОДЫ · скольз. за год · ' + cur, 220);
     charts['avgexp'] = new Chart(c1.canvas.getContext('2d'), {
       type: 'bar',
       data: { labels: labels, datasets: [{ data: ms.map(function(m) { return m.avg_expense; }),
         backgroundColor: col1, borderRadius: 5, borderSkipped: false }] },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) {
-          var m = ms[ctx.dataIndex]; var s = fmt(m.avg_expense, 'RUB');
+          var m = ms[ctx.dataIndex]; var s = fmt(m.avg_expense, cur);
           if (m.avg_change_pct != null) s += '  (' + (m.avg_change_pct > 0 ? '+' : '') + m.avg_change_pct + '% к пред. мес)';
           return s; } } } },
         scales: scaleOpts }

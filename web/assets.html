@@ -378,9 +378,8 @@
 </div>
 
 <div class="currency-bar">
-  <button class="currency-btn active" data-cur="USD">USD</button>
-  <button class="currency-btn" data-cur="RUB">RUB</button>
-  <button class="currency-btn" data-cur="USDT">USDT</button>
+  <button class="currency-btn active" data-cur="RUB">RUB</button>
+  <button class="currency-btn" data-cur="USD">USD</button>
   <button class="currency-btn" data-cur="VND">VND</button>
 </div>
 
@@ -537,7 +536,7 @@ const CAT_ICONS = {
   'Инвесткопилка': 'IS', 'Кэш': 'CA', 'Недвижимость': 'RE',
 };
 
-let currency = 'USD';
+let currency = 'RUB';
 let timelineChart = null;
 let donutChart = null;
 
@@ -586,8 +585,10 @@ async function loadEvents() {
   const moSec = document.getElementById('monthly-section');
   const list = document.getElementById('events-list');
   try {
-    const res = await fetch(`/api/asset-events?user_id=${userId}`);
+    const res = await fetch(`/api/asset-events?user_id=${userId}&currency=${currency}`);
     const data = await res.json();
+    const evCur = data.currency || currency;
+    const evSym = {RUB:'₽', USD:'$', USDT:'$', VND:'₫', EUR:'€'}[evCur] || evCur;
 
     // карточки событий
     const events = data.events || [];
@@ -627,7 +628,7 @@ async function loadEvents() {
         options: { responsive: true, maintainAspectRatio: true, animation: { duration: 300 },
           plugins: { legend: { display: false }, tooltip: { callbacks: {
             label: c => c.dataset.label + ': ' + (c.parsed.y >= 0 ? '+' : '−') +
-              new Intl.NumberFormat('ru').format(Math.abs(Math.round(c.parsed.y))) + ' ₽',
+              new Intl.NumberFormat('ru').format(Math.abs(Math.round(c.parsed.y))) + ' ' + evSym,
             afterBody: items => {
               const m = months[items[0].dataIndex]; const lines = [];
               if (m.market_note) lines.push('↳ рынок: ' + m.market_note);
@@ -666,9 +667,11 @@ function render(data) {
   // Runway
   document.getElementById('runway-months').textContent = fmtMonths(runway.months);
   document.getElementById('runway-sub').textContent =
-    runway.months !== null ? 'при расходах ' + fmt(runway.avg_monthly_expense, cur) + '/мес' : 'нет данных о расходах';
+    runway.months !== null ? 'на ликвидности при расходах ' + fmt(runway.avg_monthly_expense, cur) + '/мес' : 'нет данных о расходах';
   document.getElementById('runway-note').textContent =
-    runway.expense_months_count ? `среднее за ${runway.expense_months_count} мес.` : '';
+    runway.expense_months_count
+      ? `ликвидность ${fmt(runway.liquid_value || 0, cur)} · ср. за ${runway.expense_months_count} мес.`
+      : '';
 
   // Passive income
   const hasPassive = passive_income.avg_monthly > 0;
