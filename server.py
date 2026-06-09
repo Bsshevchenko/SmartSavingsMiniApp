@@ -819,7 +819,7 @@ async def asset_events(
     for code in CRYPTO:
         if code not in held:
             continue
-        qn = by_code[code][-1][1]
+        qn = shares_at(by_code[code], now_d)   # qty на 1-е число (без докупок текущего месяца)
         n, t = now_then(code)
         if n:
             cval_now += qn * n
