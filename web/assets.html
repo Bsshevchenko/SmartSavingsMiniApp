@@ -149,6 +149,7 @@
   .insights-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    align-items: start;
     gap: 10px;
     padding: 0 16px 16px;
   }
@@ -175,8 +176,19 @@
   .insight-card .i-note { font-size: 10px; color: var(--sub); margin-top: 6px; opacity: .7; }
   .insight-card.runway .i-main { color: var(--accent2); }
   .insight-card.passive .i-main { color: var(--green); }
-  .runway-bar-wrap { height: 5px; background: var(--border); border-radius: 3px; margin: 8px 0 5px; overflow: hidden; }
-  .runway-bar { height: 100%; border-radius: 3px; transition: width .5s; }
+  .insight-card { cursor: pointer; }
+  .ins-bar-wrap { height: 5px; background: var(--border); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .ins-bar { height: 100%; border-radius: 3px; transition: width .5s; }
+  .insight-details {
+    max-height: 0; overflow: hidden; opacity: 0;
+    transition: max-height .3s ease, opacity .25s ease, margin-top .3s ease;
+  }
+  .insight-card.expanded .insight-details { max-height: 160px; opacity: 1; margin-top: 7px; }
+  .insight-chevron {
+    position: absolute; top: 12px; right: 12px;
+    font-size: 9px; color: var(--sub); transition: transform .25s;
+  }
+  .insight-card.expanded .insight-chevron { transform: rotate(180deg); }
 
   /* ── Раскрывающийся график позиции ── */
   .pos-wrap { display: flex; flex-direction: column; }
@@ -406,20 +418,27 @@
 
   <!-- Инсайты -->
   <div class="insights-row">
-    <div class="insight-card runway">
+    <div class="insight-card runway" id="runway-card">
+      <div class="insight-chevron">▼</div>
       <div class="i-icon">🏖️</div>
       <div class="i-title">Финансовый запас</div>
       <div class="i-main" id="runway-months">—</div>
-      <div class="i-sub" id="runway-sub">месяцев жизни</div>
-      <div class="runway-bar-wrap"><div class="runway-bar" id="runway-bar" style="width:0"></div></div>
-      <div class="i-note" id="runway-note"></div>
+      <div class="ins-bar-wrap"><div class="ins-bar" id="runway-bar" style="width:0"></div></div>
+      <div class="insight-details">
+        <div class="i-sub" id="runway-sub">месяцев жизни</div>
+        <div class="i-note" id="runway-note"></div>
+      </div>
     </div>
-    <div class="insight-card passive">
+    <div class="insight-card passive" id="passive-card">
+      <div class="insight-chevron">▼</div>
       <div class="i-icon">💰</div>
       <div class="i-title">Пассивный доход</div>
       <div class="i-main" id="passive-avg">—</div>
-      <div class="i-sub">среднемесячный</div>
-      <div class="i-note" id="passive-note"></div>
+      <div class="ins-bar-wrap"><div class="ins-bar" id="passive-bar" style="width:0"></div></div>
+      <div class="insight-details">
+        <div class="i-sub" id="passive-sub">среднемесячный</div>
+        <div class="i-note" id="passive-note"></div>
+      </div>
     </div>
   </div>
 
@@ -692,17 +711,22 @@ function render(data) {
   // Passive income
   const hasPassive = passive_income.avg_monthly > 0;
   document.getElementById('passive-avg').textContent = hasPassive ? fmt(passive_income.avg_monthly, cur) : '—';
+  const pBar = document.getElementById('passive-bar');
   if (hasPassive) {
     const thisM = passive_income.this_month > 0 ? `этот мес.: ${fmt(passive_income.this_month, cur)}` : 'в этом мес.: нет';
     document.getElementById('passive-note').textContent = thisM;
-    // Добавляем % от расходов
+    // Покрытие расходов пассивным доходом — градиент-бар
     const pctOfExpense = runway.avg_monthly_expense > 0
       ? Math.round(passive_income.avg_monthly / runway.avg_monthly_expense * 100) : 0;
-    document.querySelector('.insight-card.passive .i-sub').textContent =
-      `покрывает ${pctOfExpense}% расходов`;
+    document.getElementById('passive-sub').textContent = `покрывает ${pctOfExpense}% расходов`;
+    if (pBar) {
+      pBar.style.width = Math.min(100, pctOfExpense) + '%';
+      pBar.style.background = pctOfExpense >= 100 ? 'var(--green)' : 'linear-gradient(90deg,#4ade80,#fbbf24)';
+    }
   } else {
     document.getElementById('passive-note').textContent = 'нет пассивного дохода';
-    document.querySelector('.insight-card.passive .i-sub').textContent = 'среднемесячный';
+    document.getElementById('passive-sub').textContent = 'среднемесячный';
+    if (pBar) pBar.style.width = '0';
   }
 
   // Timeline chart
@@ -1069,6 +1093,12 @@ document.querySelectorAll('.currency-btn').forEach(btn => {
     currency = btn.dataset.cur;
     load();
   });
+});
+
+// Инсайт-карточки сворачиваются/раскрываются по тапу
+['runway-card', 'passive-card'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', () => el.classList.toggle('expanded'));
 });
 
 load();
