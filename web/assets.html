@@ -175,6 +175,8 @@
   .insight-card .i-note { font-size: 10px; color: var(--sub); margin-top: 6px; opacity: .7; }
   .insight-card.runway .i-main { color: var(--accent2); }
   .insight-card.passive .i-main { color: var(--green); }
+  .runway-bar-wrap { height: 5px; background: var(--border); border-radius: 3px; margin: 8px 0 5px; overflow: hidden; }
+  .runway-bar { height: 100%; border-radius: 3px; transition: width .5s; }
 
   /* ── Раскрывающийся график позиции ── */
   .pos-wrap { display: flex; flex-direction: column; }
@@ -409,6 +411,7 @@
       <div class="i-title">Финансовый запас</div>
       <div class="i-main" id="runway-months">—</div>
       <div class="i-sub" id="runway-sub">месяцев жизни</div>
+      <div class="runway-bar-wrap"><div class="runway-bar" id="runway-bar" style="width:0"></div></div>
       <div class="i-note" id="runway-note"></div>
     </div>
     <div class="insight-card passive">
@@ -668,10 +671,23 @@ function render(data) {
   document.getElementById('runway-months').textContent = fmtMonths(runway.months);
   document.getElementById('runway-sub').textContent =
     runway.months !== null ? 'на ликвидности при расходах ' + fmt(runway.avg_monthly_expense, cur) + '/мес' : 'нет данных о расходах';
-  document.getElementById('runway-note').textContent =
-    runway.expense_months_count
-      ? `ликвидность ${fmt(runway.liquid_value || 0, cur)} · ср. за ${runway.expense_months_count} мес.`
-      : '';
+  // Целевая подушка — 1 год расходов
+  const cov = runway.coverage_pct;
+  const bar = document.getElementById('runway-bar');
+  if (bar) {
+    bar.style.width = Math.min(100, cov || 0) + '%';
+    bar.style.background = (cov != null && cov >= 100)
+      ? 'var(--green)' : 'linear-gradient(90deg,#7c6af7,#5eead4)';
+  }
+  if (runway.target_value) {
+    const reached = cov != null && cov >= 100;
+    document.getElementById('runway-note').textContent = reached
+      ? `цель 1 год достигнута (${fmt(runway.target_value, cur)})`
+      : `цель 1 год: ${fmt(runway.target_value, cur)} · покрыто ${cov != null ? cov : 0}% · не хватает ${fmt(runway.target_gap, cur)}`;
+  } else {
+    document.getElementById('runway-note').textContent =
+      runway.expense_months_count ? `ликвидность ${fmt(runway.liquid_value || 0, cur)}` : '';
+  }
 
   // Passive income
   const hasPassive = passive_income.avg_monthly > 0;

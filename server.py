@@ -598,6 +598,11 @@ async def assets_data(
     exp_metric = avg_monthly_expense(con, user_id, currency, curr_rates, hist_rates)
     avg_exp = exp_metric["avg"]
     runway_months = round(liquid_value / avg_exp, 1) if avg_exp else None
+    # Целевой уровень подушки — 1 год расходов
+    TARGET_MONTHS = 12
+    target_value = round(avg_exp * TARGET_MONTHS, 2) if avg_exp else 0
+    coverage_pct = round(liquid_value / target_value * 100) if target_value else None
+    target_gap = round(target_value - liquid_value, 2) if target_value else 0
 
     # ── Пассивный доход ──
     PASSIVE_KEYWORDS = ("процент", "дивиденд", "купон", "рент", "аренд", "пассив", "роялт", "кэшбэк")
@@ -639,6 +644,10 @@ async def assets_data(
             "avg_monthly_expense": round(avg_exp, 2),
             "expense_months_count": exp_metric["months_count"],
             "liquid_value": round(liquid_value, 2),
+            "target_months": TARGET_MONTHS,
+            "target_value": target_value,
+            "coverage_pct": coverage_pct,
+            "target_gap": target_gap,
         },
         "passive_income": {
             "this_month": round(passive_this_month, 2),
