@@ -611,6 +611,7 @@ document.querySelectorAll('.num-btn').forEach(function(btn) {
 // клавиатурой. Так заметка всегда видна над клавиатурой во время ввода.
 var noteInput = document.getElementById('note-input');
 var bottomArea = document.getElementById('bottom-area');
+var bottomNav = document.getElementById('bottom-nav');
 var appEl = document.getElementById('app');
 var vv = window.visualViewport;
 
@@ -623,6 +624,8 @@ function fitNoteAboveKeyboard() {
 noteInput.addEventListener('focus', function() {
   noteFocused = true;
   bottomArea.style.display = 'none';
+  // iOS прижимает fixed-навигацию над клавиатурой — она перекрывала заметку, прячем
+  bottomNav.style.display = 'none';
   // клавиатура появляется не мгновенно — подгоняем после анимации; resize ниже добивает точно
   setTimeout(fitNoteAboveKeyboard, 100);
   setTimeout(fitNoteAboveKeyboard, 350);
@@ -630,6 +633,7 @@ noteInput.addEventListener('focus', function() {
 noteInput.addEventListener('blur', function() {
   noteFocused = false;
   bottomArea.style.display = '';
+  bottomNav.style.display = '';
   // возвращаем полную высоту
   if (tg && tg.viewportStableHeight) appEl.style.height = tg.viewportStableHeight + 'px';
   else appEl.style.height = '';
