@@ -553,6 +553,7 @@ var MODE_COLOR = { expense:'#f04f6a', income:'#34d399', asset:'#818cf8' };
 var MODE_GLOW  = { expense:'rgba(240,79,106,0.18)', income:'rgba(52,211,153,0.14)', asset:'rgba(129,140,248,0.18)' };
 
 var state = { mode:'expense', amountStr:'', currency:null, category:null };
+var noteFocused = false;   // активен ли ввод заметки (тогда высотой рулит visualViewport)
 
 // ── Telegram init ──
 var tg = window.Telegram && window.Telegram.WebApp;
@@ -578,6 +579,7 @@ if (tg) {
   tg.expand();
   if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
   tg.onEvent('viewportChanged', function() {
+    if (noteFocused) return;   // при открытой клавиатуре высотой управляет visualViewport
     if (tg.viewportStableHeight) {
       document.getElementById('app').style.height = tg.viewportStableHeight + 'px';
     }
@@ -603,16 +605,36 @@ document.querySelectorAll('.num-btn').forEach(function(btn) {
   }, { passive: true });
 });
 
-// ── Note input: hide numpad when keyboard is open on mobile ──
+// ── Note input: на мобиле клавиатура перекрывает поле ──
+// iOS-WebView не сжимает layout-viewport под клавиатуру, поэтому прячем нампад,
+// ужимаем #app до реально видимой области (visualViewport) и поднимаем поле над
+// клавиатурой. Так заметка всегда видна над клавиатурой во время ввода.
 var noteInput = document.getElementById('note-input');
 var bottomArea = document.getElementById('bottom-area');
+var appEl = document.getElementById('app');
+var vv = window.visualViewport;
+
+function fitNoteAboveKeyboard() {
+  if (!noteFocused) return;
+  if (vv) appEl.style.height = vv.height + 'px';   // высота над клавиатурой
+  noteInput.scrollIntoView({ block: 'center' });
+}
+
 noteInput.addEventListener('focus', function() {
+  noteFocused = true;
   bottomArea.style.display = 'none';
-  setTimeout(function() { noteInput.scrollIntoView({ behavior:'smooth', block:'center' }); }, 150);
+  // клавиатура появляется не мгновенно — подгоняем после анимации; resize ниже добивает точно
+  setTimeout(fitNoteAboveKeyboard, 100);
+  setTimeout(fitNoteAboveKeyboard, 350);
 });
 noteInput.addEventListener('blur', function() {
+  noteFocused = false;
   bottomArea.style.display = '';
+  // возвращаем полную высоту
+  if (tg && tg.viewportStableHeight) appEl.style.height = tg.viewportStableHeight + 'px';
+  else appEl.style.height = '';
 });
+if (vv) vv.addEventListener('resize', fitNoteAboveKeyboard);
 noteInput.addEventListener('keydown', function(e) {
   if (e.key === 'Enter' || e.keyCode === 13) {
     e.preventDefault();
