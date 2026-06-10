@@ -110,24 +110,30 @@ def get_entries(
     limit: int = 30,
     offset: int = 0,
     db_path: Path = DB_PATH,
+    mode: str | None = None,
 ) -> list[dict]:
-    """Возвращает записи пользователя, отсортированные по дате (новые первые)."""
+    """Возвращает записи пользователя, отсортированные по дате (новые первые).
+    mode (expense/income/asset) — необязательный фильтр по типу записи."""
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     cur = con.cursor()
-    cur.execute("""
+    mode_ok = mode in ("expense", "income", "asset")
+    where = "WHERE e.user_id = ?" + (" AND e.mode = ?" if mode_ok else "")
+    params = [user_id] + ([mode] if mode_ok else [])
+    cur.execute(f"""
         SELECT e.id, e.mode, CAST(e.amount AS REAL) as amount,
                c.code as currency, cat.name as category,
                e.note, e.created_at
         FROM entries e
         JOIN currencies c ON c.id = e.currency_id
         LEFT JOIN categories cat ON cat.id = e.category_id
-        WHERE e.user_id = ?
+        {where}
         ORDER BY e.created_at DESC
         LIMIT ? OFFSET ?
-    """, (user_id, limit, offset))
+    """, (*params, limit, offset))
     rows = [dict(r) for r in cur.fetchall()]
-    cur.execute("SELECT COUNT(*) as cnt FROM entries WHERE user_id=?", (user_id,))
+    cnt_where = "WHERE user_id=?" + (" AND mode=?" if mode_ok else "")
+    cur.execute(f"SELECT COUNT(*) as cnt FROM entries {cnt_where}", tuple(params))
     total = cur.fetchone()["cnt"]
     con.close()
     return rows, total

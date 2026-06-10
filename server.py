@@ -191,10 +191,11 @@ async def history_data(
     user_id: int = Depends(require_user_id),
     limit: int = Query(30),
     offset: int = Query(0),
+    mode: str = Query(None),
 ):
     if not DB_PATH.exists():
         return JSONResponse({"entries": [], "total": 0})
-    entries, total = db_repo.get_entries(user_id, limit, offset, db_path=DB_PATH)
+    entries, total = db_repo.get_entries(user_id, limit, offset, db_path=DB_PATH, mode=mode)
     return JSONResponse({"entries": entries, "total": total})
 
 
