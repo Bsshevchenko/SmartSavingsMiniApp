@@ -298,23 +298,34 @@
   .event-card.bad  .event-title { color: var(--red); }
   .event-detail { font-size: 12px; color: var(--sub); margin-top: 3px; line-height: 1.4; }
 
+  /* ── Нижняя навигация — единая на всех страницах ── */
   .bottom-nav {
     position: fixed;
     bottom: 0; left: 0; right: 0;
-    background: var(--card);
-    border-top: 1px solid var(--border);
+    background: #16161e;
+    border-top: 1px solid rgba(255,255,255,0.08);
     display: flex;
     padding: 8px 0 max(8px, env(safe-area-inset-bottom));
     z-index: 100;
   }
-  .nav-item {
-    flex: 1; display: flex; flex-direction: column; align-items: center;
-    gap: 3px; text-decoration: none; color: var(--sub);
-    font-size: 10px; font-weight: 500; padding: 4px 0;
-    transition: color .15s;
+  .bottom-nav .nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    text-decoration: none;
+    color: rgba(232,232,240,0.45);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
   }
-  .nav-item .icon { font-size: 20px; }
-  .nav-item.active { color: var(--accent); }
+  .bottom-nav .nav-ic { font-size: 20px; }
+  .bottom-nav .nav-item.active { color: #818cf8; }
 
   /* ── Лоадер ── */
   .loader {
@@ -515,12 +526,12 @@
 </div>
 
 <!-- Bottom Nav -->
-<nav class="bottom-nav">
-  <a href="/" class="nav-item"><span class="icon">💸</span><span>Расходы</span></a>
-  <a href="/analytics" class="nav-item"><span class="icon">📊</span><span>Аналитика</span></a>
-  <a href="/assets" class="nav-item active"><span class="icon">🏦</span><span>Активы</span></a>
-  <a href="/history" class="nav-item"><span class="icon">🕐</span><span>История</span></a>
-  <a href="/fin-model" class="nav-item"><span class="icon">📋</span><span>Модель</span></a>
+<nav class="bottom-nav" id="bottom-nav">
+  <a class="nav-item" href="/"><span class="nav-ic">💳</span><span class="nav-lb">Ввод</span></a>
+  <a class="nav-item" href="/analytics"><span class="nav-ic">📊</span><span class="nav-lb">Аналитика</span></a>
+  <a class="nav-item active" href="/assets"><span class="nav-ic">🏦</span><span class="nav-lb">Активы</span></a>
+  <a class="nav-item" href="/history"><span class="nav-ic">🕐</span><span class="nav-lb">История</span></a>
+  <a class="nav-item" href="/fin-model"><span class="nav-ic">📋</span><span class="nav-lb">Модель</span></a>
 </nav>
 
 <script>
