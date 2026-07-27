@@ -367,22 +367,26 @@ def build_fin_model(user_id: int, db_path: Path = DB_PATH, cache_path: Path = CA
     actual_pf, breakdown = {}, {}
     cur_month = int(today[5:7])
     for m in range(1, cur_month):
-        first_m = f"{year:04d}-{m:02d}-01"
-        close = f"{year:04d}-{m+1:02d}-01" if m < 12 else f"{year+1:04d}-01-01"
+        # Цены — только из закрытых месячных слотов. Слот текущего месяца живой
+        # (update_daily_rates переписывает его ежедневно), поэтому месяц m оценивается
+        # своим слотом, а его начало — слотом предыдущего: иначе факт последнего
+        # завершённого месяца ехал бы каждый день вслед за текущим рынком.
+        price_end = f"{year:04d}-{m:02d}-01"
+        price_start = (f"{year:04d}-{m-1:02d}-01" if m > 1 else f"{year-1:04d}-12-01")
         eom = last_day(year, m)
         eom_prev = last_day(year, m - 1) if m > 1 else last_day(year - 1, 12)
-        end = pf_value(eom, close)
+        end = pf_value(eom, price_end)
         if end is None:
             continue
-        start = pf_value(eom_prev, first_m) or 0.0
+        start = pf_value(eom_prev, price_start) or 0.0
         actual_pf[f"{year:04d}-{m:02d}"] = round(end)
-        rub_s, rub_e = rate_on("RUB", first_m), rate_on("RUB", close)
+        rub_s, rub_e = rate_on("RUB", price_start), rate_on("RUB", price_end)
         market = 0.0
         for ticker, hist in holdings_history.items():
             q0 = _shares_at(hist, eom_prev)
             if q0 <= 0 or ticker == "RUB":
                 continue
-            pr_s, pr_e = rate_on(ticker, first_m), rate_on(ticker, close)
+            pr_s, pr_e = rate_on(ticker, price_start), rate_on(ticker, price_end)
             if pr_s and pr_e and rub_s and rub_e:
                 market += q0 * (pr_e / rub_e - pr_s / rub_s)
         breakdown[f"{year:04d}-{m:02d}"] = {

@@ -707,13 +707,26 @@ async def asset_events(
         con.close()
         return JSONResponse({"events": []})
 
-    # Окно: завершённый прошлый месяц по архивным срезам 1-го числа.
-    # now_d = начало текущего месяца (= конец прошлого), ago = начало прошлого месяца.
+    # Окно: завершённый прошлый месяц.
+    #
+    # Количества берём на границах месяца: qty_end = 1-е число текущего месяца
+    # (все сделки прошлого месяца учтены), qty_start = 1-е число прошлого.
+    #
+    # Цены — ТОЛЬКО из зафиксированных слотов. Слот YYYY-MM-01 текущего месяца живой:
+    # update_daily_rates перезаписывает его каждый день, и лишь 1-го числа следующего
+    # месяца update_monthly_rates замещает его среднемесячным. Брать его как «цену на
+    # конец прошлого месяца» — значит подмешивать в отчёт весь текущий месяц: сводка
+    # «за июнь» ежедневно ехала (SBER: слот июня 4.34 против живого июльского 3.44).
+    # Поэтому конец периода оценивается слотом прошлого месяца, начало — позапрошлого:
+    # изменение за месяц = движение среднемесячных цен, month-over-month.
     today_dt = datetime.now(timezone.utc)
     ly, lm = today_dt.year, today_dt.month
-    now_d = f"{ly:04d}-{lm:02d}-01"
+    qty_end = f"{ly:04d}-{lm:02d}-01"
     py, pm = (ly, lm - 1) if lm > 1 else (ly - 1, 12)
-    ago = f"{py:04d}-{pm:02d}-01"
+    qty_start = f"{py:04d}-{pm:02d}-01"
+    price_end = qty_start                                    # слот прошлого месяца
+    ppy, ppm = (py, pm - 1) if pm > 1 else (py - 1, 12)
+    price_start = f"{ppy:04d}-{ppm:02d}-01"                  # слот позапрошлого
 
     def rate_at(code, iso):
         v = None
@@ -725,7 +738,7 @@ async def asset_events(
         return v
 
     def now_then(code):
-        return rate_at(code, now_d), rate_at(code, ago)
+        return rate_at(code, price_end), rate_at(code, price_start)
 
     rub_now, rub_then = now_then("RUB")
     cur_now, cur_then = now_then(currency)
@@ -792,8 +805,8 @@ async def asset_events(
     held = set()
     for key, hist in by_code.items():
         code = key_code(key)
-        qn = shares_at(hist, now_d)
-        qt = shares_at(hist, ago)
+        qn = shares_at(hist, qty_end)
+        qt = shares_at(hist, qty_start)
         if qn > 0:
             held.add(code)
         pn, pt = price_rub(code, "now"), price_rub(code, "then")
@@ -844,7 +857,7 @@ async def asset_events(
     for code in CRYPTO:
         if code not in held:
             continue
-        qn = shares_at(by_code[code], now_d)   # qty на 1-е число (без докупок текущего месяца)
+        qn = shares_at(by_code[code], qty_end)  # на конец месяца, без докупок текущего
         n, t = now_then(code)
         if n:
             cval_now += qn * n
@@ -866,7 +879,7 @@ async def asset_events(
     for code in stock_codes:
         if code not in held or code in ("RUB", "TRUR"):
             continue
-        qn = shares_at(by_code[code], now_d)
+        qn = shares_at(by_code[code], qty_end)
         pn, pt = price_rub(code, "now"), price_rub(code, "then")
         if pn:
             sval_now += qn * pn
@@ -924,13 +937,15 @@ async def asset_events(
         r, base = rate_at(code, iso), rate_at(currency, iso)
         return r / base if (r and base) else None
 
-    def period_stats(then_iso, now_iso):
+    def period_stats(qty_from, qty_to, price_from, price_to):
+        """Итоги месяца: количества — на границах месяца, цены — из слотов месяца
+        и предыдущего (слот текущего месяца живой, в ретроспективе он не участвует)."""
         vn = vt = mk = 0.0
         drivers = []   # (code, market_i) для пояснений
         for key, h in by_code.items():
             code = key_code(key)
-            qn, qt = shares_at(h, now_iso), shares_at(h, then_iso)
-            pn, pt = price_at(code, now_iso), price_at(code, then_iso)
+            qn, qt = shares_at(h, qty_to), shares_at(h, qty_from)
+            pn, pt = price_at(code, price_to), price_at(code, price_from)
             if pn is not None:
                 vn += qn * pn
             if pt is not None:
@@ -975,10 +990,13 @@ async def asset_events(
             month = f"{yy:04d}-{mm:02d}"
             m_then = f"{month}-01"
             ny, nm = (yy, mm + 1) if mm < 12 else (yy + 1, 1)
-            vn, vt, mk, drivers = period_stats(m_then, f"{ny:04d}-{nm:02d}-01")
+            ppy_, ppm_ = (yy, mm - 1) if mm > 1 else (yy - 1, 12)
+            m_price_start = f"{ppy_:04d}-{ppm_:02d}-01"
+            vn, vt, mk, drivers = period_stats(m_then, f"{ny:04d}-{nm:02d}-01",
+                                               m_price_start, m_then)
             if vt > 0:
                 # пояснение рынка: топ-активы + курс рубля
-                rt, rn = rate_at("RUB", m_then), rate_at("RUB", f"{ny:04d}-{nm:02d}-01")
+                rt, rn = rate_at("RUB", m_price_start), rate_at("RUB", m_then)
                 rubmv = (rn / rt - 1) * 100 if rt and rn else 0
                 mp = [f"{c} {'+' if v >= 0 else '−'}{short(v)}" for c, v in drivers[:2]]
                 if abs(rubmv) >= 2:
@@ -995,7 +1013,7 @@ async def asset_events(
     events.sort(key=lambda e: (e["priority"], abs(e["value"])), reverse=True)
     MONTHS_FULL = ["", "январь", "февраль", "март", "апрель", "май", "июнь",
                    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
-    return JSONResponse({"period_from": ago, "period_to": now_d,
+    return JSONResponse({"period_from": qty_start, "period_to": qty_end,
                          "period_label": f"{MONTHS_FULL[pm]} {py}", "currency": currency,
                          "events": events, "monthly": monthly})
 
