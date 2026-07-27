@@ -578,33 +578,34 @@ async def assets_data(
         return total
 
     # ── Динамика: один срез на каждый месяц ──
+    # Все снапшоты разом, в хронологическом порядке. Раньше на каждый месяц шёл
+    # отдельный запрос с коррелированным MAX(created_at) и strftime — индексы там
+    # не работают, и стоимость росла как «месяцы × записи»: на слабом проде страница
+    # уползала за 5 секунд. Теперь одна выборка, а срез накапливается в памяти.
     cur.execute("""
-        SELECT DISTINCT strftime('%Y-%m', created_at) as month
-        FROM entries WHERE mode='asset' AND user_id=?
-        ORDER BY month
+        SELECT c.code AS code, strftime('%Y-%m', e.created_at) AS month,
+               CAST(e.amount AS REAL) AS amt
+        FROM entries e
+        JOIN currencies c ON c.id = e.currency_id
+        WHERE e.mode='asset' AND e.user_id=?
+        ORDER BY e.created_at
     """, (user_id,))
-    entry_months = {r["month"] for r in cur.fetchall()}
+    asset_rows = cur.fetchall()
+    entry_months = {r["month"] for r in asset_rows}
 
     realty_months = {rr["rate_month"] for rr in realty_all_rates}
     all_months = sorted(entry_months | realty_months)
 
     timeline = []
+    snapshot: dict[str, float] = {}   # тикер → количество на конец текущего месяца
+    row_i = 0
     for m in all_months:
-        # Последний снапшот каждого тикера ДО конца месяца
-        cur.execute("""
-            SELECT c.code, CAST(e.amount AS REAL) as amt
-            FROM entries e
-            JOIN currencies c ON c.id = e.currency_id
-            WHERE e.mode='asset' AND e.user_id=?
-              AND strftime('%Y-%m', e.created_at) <= ?
-              AND e.created_at = (
-                  SELECT MAX(e2.created_at) FROM entries e2
-                  WHERE e2.mode='asset' AND e2.user_id=e.user_id
-                    AND e2.currency_id=e.currency_id
-                    AND strftime('%Y-%m', e2.created_at) <= ?
-              )
-        """, (user_id, m, m))
-        snap_total = sum(_conv(r["amt"], r["code"], currency, m) for r in cur.fetchall())
+        # Докатываем снапшот до конца месяца m: последняя запись по тикеру побеждает
+        while row_i < len(asset_rows) and asset_rows[row_i]["month"] <= m:
+            r = asset_rows[row_i]
+            snapshot[r["code"]] = r["amt"]
+            row_i += 1
+        snap_total = sum(_conv(amt, code, currency, m) for code, amt in snapshot.items())
         snap_total += _realty_value_at(m)
         mo_idx = int(m[5:]) - 1
         timeline.append({
