@@ -35,4 +35,11 @@ jobs:
               '${{ secrets.BOT_TOKEN }}' \
               '${{ secrets.WEBAPP_URL }}' \
               '${{ secrets.NGROK_AUTHTOKEN }}' > .env
-            docker compose up --build -d
+            docker compose up --build -d --remove-orphans
+
+            # Диск на сервере — 8.8 ГБ, каждая пересборка оставляет за собой слои.
+            # Чистим после того, как новые контейнеры уже подняты: prune трогает только
+            # то, что не используется запущенными контейнерами.
+            docker image prune -f
+            docker builder prune -f --max-used-space 1GB
+            docker system df
