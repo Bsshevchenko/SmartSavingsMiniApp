@@ -322,13 +322,26 @@ var CAT_COLORS = [
   '#818cf8','#f04f6a','#34d399','#fbbf24','#60a5fa','#f472b6','#a78bfa','#2dd4bf'
 ];
 
+// Сколько знаков оставлять при сокращении до M/B. null → валюта не сокращается вообще.
+// RUB: 3 знака → точность до 1000 ₽ (1.234M вместо 1.2M).
+// VND: 1 знака достаточно — 0.1M ₫ мельче, чем 0.001M ₽.
+var CUR_COMPACT = { RUB: 3, VND: 1, USD: null };
+
+function groupDigits(n) {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
 function fmt(n, currency) {
   if (!n) return '0 ' + (CUR_SYMBOLS[currency] || currency);
   var sym = CUR_SYMBOLS[currency] || currency + ' ';
-  if (n >= 1000000000) return sym + (n/1000000000).toFixed(1) + 'B';
-  if (n >= 1000000)    return sym + (n/1000000).toFixed(1) + 'M';
-  if (n >= 1000)       return sym + Math.round(n/1000) + 'K';
-  return sym + Math.round(n);
+  var sign = n < 0 ? '-' : '';
+  var a = Math.abs(n);
+  var dig = (currency in CUR_COMPACT) ? CUR_COMPACT[currency] : 1;
+  if (dig === null)  return sign + sym + groupDigits(a);
+  if (a >= 1000000000) return sign + sym + (a/1000000000).toFixed(dig) + 'B';
+  if (a >= 1000000)    return sign + sym + (a/1000000).toFixed(dig) + 'M';
+  if (a >= 1000)       return sign + sym + Math.round(a/1000) + 'K';
+  return sign + sym + Math.round(a);
 }
 
 function setPeriod(p) {
@@ -364,11 +377,29 @@ function loadData() {
   xhr.send();
 }
 
-function yTick(v) {
-  if (v >= 1000000000) return (v/1000000000).toFixed(1)+'B';
-  if (v >= 1000000)    return (v/1000000).toFixed(0)+'M';
-  if (v >= 1000)       return (v/1000).toFixed(0)+'K';
-  return v;
+// Сколько знаков нужно, чтобы шаг оси не «схлопывался» (шаг 200 при K → 1.2K, а не 1K).
+function axisDigits(step, unit) {
+  if (!step) return 0;
+  var r = step / unit;
+  for (var d = 0; d <= 3; d++) {
+    if (Math.abs(r - Number(r.toFixed(d))) < r * 1e-6) return d;
+  }
+  return 3;
+}
+
+function yTick(v, i, ticks) {
+  var step = 0;
+  if (ticks && ticks.length > 1) {
+    step = Math.abs(ticks[1].value - ticks[0].value);
+    for (var k = 2; k < ticks.length; k++) {
+      step = Math.min(step, Math.abs(ticks[k].value - ticks[k-1].value));
+    }
+  }
+  var a = Math.abs(v);
+  if (a >= 1000000000) return (v/1000000000).toFixed(axisDigits(step, 1000000000))+'B';
+  if (a >= 1000000)    return (v/1000000).toFixed(axisDigits(step, 1000000))+'M';
+  if (a >= 1000)       return (v/1000).toFixed(axisDigits(step, 1000))+'K';
+  return Math.round(v * 100) / 100;
 }
 var scaleOpts = {
   x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { font: { size: 11 } } },
