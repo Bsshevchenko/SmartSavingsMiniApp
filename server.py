@@ -9,6 +9,7 @@ FastAPI сервер:
 Обновление курсов — фоновые шедулеры (update_daily_rates, update_monthly_rates).
 """
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ import fin_model_data
 import metrics
 from metrics import load_historical_rates, convert_h, avg_monthly_expense
 from tg_auth import require_user_id
+from config import settings
 
 # Символы валют для форматирования сумм в событиях
 CUR_SYM = {"RUB": "₽", "USD": "$", "USDT": "$", "VND": "₫", "EUR": "€", "THB": "฿", "MYR": "RM"}
@@ -111,8 +113,30 @@ def _run_dividends():
         logging.getLogger(__name__).error("dividends refresh failed: %s", e)
 
 
+def _maybe_refresh_dev_db():
+    """DEV: перед стартом пересобрать локальную БД из продового зеркала в Postgres.
+
+    Локальная app.db иначе живёт своей жизнью и устаревает на недели. Прод (DEV_MODE
+    выключен) и тесты сюда не заходят. Не смогли достать — не беда: поднимаемся на той
+    БД, что уже лежит локально.
+    """
+    if not settings.DEV_MODE or not settings.DEV_DB_AUTO_PULL or "pytest" in sys.modules:
+        return
+    # print, а не logging: uvicorn не поднимает root-логгер, а видеть паузу на старте нужно
+    def say(msg):
+        print(f"dev-db: {msg}", flush=True)
+
+    try:
+        from tools.pull_dev_db import refresh_local_db
+        refresh_local_db(DB_PATH, backup=False,
+                         max_age_hours=settings.DEV_DB_MAX_AGE_HOURS, log=say)
+    except Exception as e:
+        say(f"не обновлена, работаем на текущей {DB_PATH.name} — {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _maybe_refresh_dev_db()
     scheduler = AsyncIOScheduler(timezone="UTC")
     # Ежедневно в 02:00 UTC — обновляем текущий курс
     scheduler.add_job(_run_daily, "cron", hour=2, minute=0, id="daily_rates")

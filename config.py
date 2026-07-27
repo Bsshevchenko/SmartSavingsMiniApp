@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     DEV_MODE: bool = False
     DEV_USER_ID: int = 0
 
+    # При DEV_MODE сервер перед стартом пересобирает data/app.db из продового
+    # зеркала в Postgres (tools/pull_dev_db.py). Выкачка пропускается, если данные
+    # тянули меньше DEV_DB_MAX_AGE_HOURS назад — в Postgres они и так суточные.
+    DEV_DB_AUTO_PULL: bool = True
+    DEV_DB_MAX_AGE_HOURS: float = 12
+
     class Config:
         env_file = ".env"
 
