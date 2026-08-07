@@ -583,10 +583,12 @@ async def assets_data(
     # не работают, и стоимость росла как «месяцы × записи»: на слабом проде страница
     # уползала за 5 секунд. Теперь одна выборка, а срез накапливается в памяти.
     cur.execute("""
-        SELECT c.code AS code, strftime('%Y-%m', e.created_at) AS month,
+        SELECT c.code AS code, COALESCE(cat.name, '') AS category,
+               strftime('%Y-%m', e.created_at) AS month,
                CAST(e.amount AS REAL) AS amt
         FROM entries e
         JOIN currencies c ON c.id = e.currency_id
+        LEFT JOIN categories cat ON cat.id = e.category_id
         WHERE e.mode='asset' AND e.user_id=?
         ORDER BY e.created_at
     """, (user_id,))
@@ -613,6 +615,39 @@ async def assets_data(
             "label": RU_MONTHS[mo_idx] + " " + m[2:4],
             "value": round(snap_total, 2),
         })
+
+    # ── P&L за всё время: сколько принёс рынок, а сколько я просто довнёс ──
+    # Считается по тем же данным, что уже собраны выше (снапшоты, ставки недвижимости,
+    # исторические курсы), плюс один запрос за доходом активов — сеть и диск не трогаем.
+    income_raw = metrics.asset_income_by_category(
+        con, user_id, currency, curr_rates, hist_rates)
+    income_by_cat = {cat: v["amount"] for cat, v in income_raw.items()}
+    pnl = metrics.portfolio_pnl(
+        asset_rows, realty_all_rates, all_months, currency, hist_rates, income_by_cat)
+    for p in positions:
+        p["pnl"] = round(pnl["realty"] if p["category"] == "Недвижимость"
+                         else pnl["by_ticker"].get(p["ticker"], 0.0), 2)
+    for c in by_category:
+        c["pnl"] = round(pnl["by_category"].get(c["name"], 0.0), 2)
+        if c["name"] in income_raw:
+            c["income_pnl"] = round(income_raw[c["name"]]["amount"], 2)
+            c["income_sources"] = income_raw[c["name"]]["sources"]
+    # Проданные тикеры: позиции нет, а результат по ней в итоге категории есть —
+    # отдаём отдельным списком, иначе цифры в карточке категории не сойдутся
+    open_tickers = {p["ticker"] for p in positions}
+    closed_positions = sorted(
+        ({"ticker": code, "category": pnl["category_of"].get(code, "Без категории"),
+          "pnl": round(value, 2)}
+         for code, value in pnl["by_ticker"].items()
+         if code not in open_tickers and round(value, 2)),
+        key=lambda x: x["pnl"])
+    closed_pnl = sum(p["pnl"] for p in closed_positions)
+    # Категория могла закрыться целиком — показываем её, иначе её результат пропадёт
+    shown = {c["name"] for c in by_category}
+    for name, value in pnl["by_category"].items():
+        if name not in shown and round(value, 2):
+            by_category.append({"name": name, "value": 0.0, "pct": 0.0,
+                                "pnl": round(value, 2), "closed": True})
 
     # ── Финансовый запас: сколько месяцев проживём на ЛИКВИДНОСТИ ──
     # Считаем только по категории «Ликвидность» (не по всему капиталу — акции/крипта
@@ -662,6 +697,13 @@ async def assets_data(
     return JSONResponse({
         "currency": currency,
         "total": round(total_value, 2),
+        "pnl": {
+            "total": round(pnl["total"], 2),
+            "revaluation": round(pnl["total"] - sum(pnl["income"].values()), 2),
+            "income": {k: round(v, 2) for k, v in pnl["income"].items()},
+            "closed": round(closed_pnl, 2),
+            "closed_positions": closed_positions,
+        },
         "positions": positions,
         "by_category": by_category,
         "timeline": timeline,

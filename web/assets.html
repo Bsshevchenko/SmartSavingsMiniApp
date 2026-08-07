@@ -127,6 +127,18 @@
   .pos-right { text-align: right; flex-shrink: 0; }
   .pos-value { font-weight: 700; font-size: 15px; }
   .pos-pct { font-size: 12px; color: var(--sub); margin-top: 1px; }
+  .pnl-up { color: var(--green); }
+  .pnl-down { color: var(--red); }
+  .pnl-flat { color: var(--sub); }
+  .pos-pnl { font-size: 12px; font-weight: 600; margin-top: 1px; }
+  .pos-extra { opacity: .75; }
+  .pos-extra .pos-ticker { font-size: 13px; font-weight: 600; }
+  .pos-extra .pos-pnl { font-size: 13px; }
+  .cat-group-pnl { font-size: 12px; font-weight: 600; margin-top: 1px; }
+  /* P&L идёт сразу за суммой, по её базовой линии и мельче — как в биржевых приложениях */
+  .total-line { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+  .total-line .value.big { margin-top: 0; }
+  #total-pnl { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
   .pos-qty { font-size: 11px; color: var(--sub); margin-top: 2px; }
 
   /* прогресс-бар внутри позиции */
@@ -415,7 +427,10 @@
   <div class="summary-row">
     <div class="sum-card full">
       <div class="label">Общая стоимость</div>
-      <div class="value big" id="total-value">—</div>
+      <div class="total-line">
+        <span class="value big" id="total-value">—</span>
+        <span id="total-pnl"></span>
+      </div>
     </div>
     <div class="sum-card">
       <div class="label">Позиций</div>
@@ -582,6 +597,17 @@ function fmt(val, cur) {
   return new Intl.NumberFormat('ru', {maximumFractionDigits: 2}).format(val) + ' ' + cur;
 }
 
+// P&L за всё время — всегда со знаком и в валюте (проценты тут врут: капитал
+// вносился неравномерно, и «% к вложенному» зависит от того, когда именно доносил)
+function fmtPnl(val, cur) {
+  const sign = val > 0 ? '+' : (val < 0 ? '−' : '');
+  return sign + fmt(Math.abs(val), cur);
+}
+
+function pnlClass(val) {
+  return val > 0 ? 'pnl-up' : (val < 0 ? 'pnl-down' : 'pnl-flat');
+}
+
 function fmtQty(qty) {
   if (qty >= 1000) return new Intl.NumberFormat('ru').format(Math.round(qty));
   if (qty >= 1) return new Intl.NumberFormat('ru', {maximumFractionDigits: 4}).format(qty);
@@ -688,12 +714,18 @@ function fmtMonths(m) {
 }
 
 function render(data) {
-  const { total, positions, by_category, timeline, currency: cur, runway, passive_income } = data;
+  const { total, positions, by_category, timeline, currency: cur, runway, passive_income, pnl } = data;
+  // Категория без позиций закрыта: в долях портфеля её нет, но её P&L учитываем
+  const activeCats = by_category.filter(c => c.value > 0);
+  const closedCats = by_category.filter(c => c.value <= 0);
 
   // Summary
   document.getElementById('total-value').textContent = fmt(total, cur);
+  const pnlEl = document.getElementById('total-pnl');
+  pnlEl.className = pnl ? pnlClass(pnl.total) : '';
+  pnlEl.textContent = pnl ? fmtPnl(pnl.total, cur) : '';
   document.getElementById('total-positions').textContent = positions.length;
-  document.getElementById('total-categories').textContent = by_category.length;
+  document.getElementById('total-categories').textContent = activeCats.length;
   document.getElementById('last-updated').textContent =
     'Обновлено ' + new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit'});
 
@@ -782,10 +814,10 @@ function render(data) {
   donutChart = new Chart(donutCtx, {
     type: 'doughnut',
     data: {
-      labels: by_category.map(c => c.name),
+      labels: activeCats.map(c => c.name),
       datasets: [{
-        data: by_category.map(c => c.value),
-        backgroundColor: by_category.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]),
+        data: activeCats.map(c => c.value),
+        backgroundColor: activeCats.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]),
         borderWidth: 0,
         hoverOffset: 6,
       }]
@@ -793,7 +825,7 @@ function render(data) {
     options: {
       cutout: '70%',
       plugins: { legend: { display: false }, tooltip: {
-        callbacks: { label: ctx => ' ' + fmt(ctx.parsed, cur) + ' (' + by_category[ctx.dataIndex].pct + '%)' }
+        callbacks: { label: ctx => ' ' + fmt(ctx.parsed, cur) + ' (' + activeCats[ctx.dataIndex].pct + '%)' }
       }},
     }
   });
@@ -801,7 +833,7 @@ function render(data) {
   // Category list
   const catEl = document.getElementById('cat-list');
   catEl.innerHTML = '';
-  by_category.forEach((cat, i) => {
+  activeCats.forEach((cat, i) => {
     const color = CAT_COLORS[i % CAT_COLORS.length];
     catEl.innerHTML += `
       <div class="cat-row">
@@ -837,7 +869,7 @@ function render(data) {
     return 'позиций';
   }
 
-  by_category.forEach((cat, catIdx) => {
+  activeCats.forEach((cat, catIdx) => {
     const catPositions = grouped[cat.name] || [];
     if (catPositions.length === 0) return;
 
@@ -857,7 +889,7 @@ function render(data) {
       </div>
       <div class="cat-group-right">
         <div class="cat-group-value">${fmt(cat.value, cur)}</div>
-        <div class="cat-group-pct">${cat.pct}%</div>
+        <div class="cat-group-pnl ${pnlClass(cat.pnl || 0)}">${fmtPnl(cat.pnl || 0, cur)}</div>
       </div>
       <div class="cat-group-chevron">▼</div>`;
 
@@ -889,7 +921,7 @@ function render(data) {
         </div>
         <div class="pos-right">
           <div class="pos-value">${fmt(p.value, cur)}</div>
-          <div class="pos-pct">${p.pct}%</div>
+          <div class="pos-pnl ${pnlClass(p.pnl || 0)}">${fmtPnl(p.pnl || 0, cur)}</div>
           <div class="pos-qty">${qtyLabel}</div>
         </div>
         ${actionsHTML}`;
@@ -924,6 +956,33 @@ function render(data) {
       body.appendChild(wrap);
     });
 
+    // Из чего ещё сложился результат категории, кроме открытых позиций: доход,
+    // который платит сам актив, и то, что осталось от уже проданных бумаг
+    const extras = [];
+    const closedHere = (pnl && pnl.closed_positions || []).filter(c => c.category === cat.name);
+    if (closedHere.length) {
+      const sum = closedHere.reduce((a, c) => a + c.pnl, 0);
+      extras.push([closedHere.map(c => c.ticker).join(', '), 'закрытые позиции', sum]);
+    }
+    if (cat.income_pnl) {
+      const src = (cat.income_sources || []).join(', ');
+      extras.push([src || 'Доход по активам', 'выплаты, полученные деньгами', cat.income_pnl]);
+    }
+    extras.forEach(([title, note, value]) => {
+      const row = document.createElement('div');
+      row.className = 'pos-card pos-extra';
+      row.innerHTML = `
+        <div class="pos-icon" style="background:#2e2e3e;color:#8888aa">•</div>
+        <div class="pos-body">
+          <div class="pos-ticker">${title}</div>
+          <div class="pos-cat">${note}</div>
+        </div>
+        <div class="pos-right">
+          <div class="pos-pnl ${pnlClass(value)}">${fmtPnl(value, cur)}</div>
+        </div>`;
+      body.appendChild(row);
+    });
+
     header.addEventListener('click', () => {
       header.classList.toggle('open');
       body.classList.toggle('open');
@@ -932,6 +991,26 @@ function render(data) {
     group.appendChild(header);
     group.appendChild(body);
     posEl.appendChild(group);
+  });
+
+  // Категории, где позиций уже не осталось: показываем строкой, иначе их результат
+  // просто исчез бы из списка, а в общей цифре он есть
+  closedCats.forEach(cat => {
+    if (!cat.pnl) return;
+    const row = document.createElement('div');
+    row.className = 'cat-group';
+    row.innerHTML = `
+      <div class="cat-group-header">
+        <div class="cat-group-icon" style="background:#2e2e3e;color:#8888aa">✕</div>
+        <div class="cat-group-info">
+          <div class="cat-group-name">${cat.name}</div>
+          <div class="cat-group-count">позиции закрыты</div>
+        </div>
+        <div class="cat-group-right">
+          <div class="cat-group-pnl ${pnlClass(cat.pnl)}">${fmtPnl(cat.pnl, cur)}</div>
+        </div>
+      </div>`;
+    posEl.appendChild(row);
   });
 }
 
