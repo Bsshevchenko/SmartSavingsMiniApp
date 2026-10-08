@@ -40,7 +40,7 @@ DB_PATH = ROOT / "data" / "app.db"
 CACHE_PATH = ROOT / "data" / "dividends_cache.json"
 
 STOCK_CATEGORY = "Акции"
-ETF_TICKERS = {"TRUR"}        # ETF: цена есть, дивидендов нет (реинвест внутри фонда)
+ETF_TICKERS = {"TRUR", "LQDT"}  # фонды: цена есть, дивидендов нет (доход реинвестируется внутри)
 SKIP_AS_CASH = {"RUB"}        # «бумага» RUB в категории Акции — это кэш
 TAX = 0.13
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"

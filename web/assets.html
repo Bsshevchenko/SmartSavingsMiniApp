@@ -103,6 +103,23 @@
     margin-bottom: 12px;
   }
   .chart-card canvas { max-height: 220px; }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 10px;
+  }
+  .section-head .section-title { margin-bottom: 0; }
+  .range-toggle { display: flex; gap: 4px; }
+  .range-btn {
+    padding: 4px 10px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--sub);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .range-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* ── Позиции ── */
   .positions-list { display: flex; flex-direction: column; gap: 8px; }
@@ -470,7 +487,13 @@
 
   <!-- Динамика -->
   <div class="section">
-    <div class="section-title">Динамика портфеля</div>
+    <div class="section-head">
+      <div class="section-title">Динамика портфеля</div>
+      <div class="range-toggle">
+        <button class="range-btn active" data-range="1y">1 год</button>
+        <button class="range-btn" data-range="all">Всё время</button>
+      </div>
+    </div>
     <div class="chart-card">
       <canvas id="timeline-chart"></canvas>
     </div>
@@ -586,6 +609,8 @@ const CAT_ICONS = {
 
 let currency = 'RUB';
 let timelineChart = null;
+let timelineRange = '1y';   // '1y' | 'all'
+let lastTimeline = null;
 let donutChart = null;
 
 function fmt(val, cur) {
@@ -761,7 +786,8 @@ function render(data) {
     // Покрытие расходов пассивным доходом — градиент-бар
     const pctOfExpense = runway.avg_monthly_expense > 0
       ? Math.round(passive_income.avg_monthly / runway.avg_monthly_expense * 100) : 0;
-    document.getElementById('passive-sub').textContent = `покрывает ${pctOfExpense}% расходов`;
+    document.getElementById('passive-sub').textContent =
+      `в среднем за ${passive_income.months_count} мес. · покрывает ${pctOfExpense}% расходов`;
     if (pBar) {
       pBar.style.width = Math.min(100, pctOfExpense) + '%';
       pBar.style.background = pctOfExpense >= 100 ? 'var(--green)' : 'linear-gradient(90deg,#4ade80,#fbbf24)';
@@ -772,41 +798,8 @@ function render(data) {
     if (pBar) pBar.style.width = '0';
   }
 
-  // Timeline chart
-  if (timelineChart) timelineChart.destroy();
-  const tlCtx = document.getElementById('timeline-chart').getContext('2d');
-  const gradient = tlCtx.createLinearGradient(0, 0, 0, 200);
-  gradient.addColorStop(0, 'rgba(124,106,247,0.35)');
-  gradient.addColorStop(1, 'rgba(124,106,247,0)');
-  timelineChart = new Chart(tlCtx, {
-    type: 'line',
-    data: {
-      labels: timeline.map(t => t.label),
-      datasets: [{
-        data: timeline.map(t => t.value),
-        borderColor: '#7c6af7',
-        backgroundColor: gradient,
-        borderWidth: 2,
-        pointRadius: timeline.length <= 12 ? 4 : 2,
-        pointBackgroundColor: '#7c6af7',
-        fill: true,
-        tension: 0.35,
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false }, tooltip: {
-        callbacks: { label: ctx => ' ' + fmt(ctx.parsed.y, cur) }
-      }},
-      scales: {
-        x: { grid: { color: '#2e2e3e' }, ticks: { color: '#8888aa', font: { size: 11 } } },
-        y: { grid: { color: '#2e2e3e' }, ticks: {
-          color: '#8888aa', font: { size: 11 },
-          callback: v => fmt(v, cur),
-        }},
-      }
-    }
-  });
+  lastTimeline = { timeline, cur };
+  renderTimeline();
 
   // Donut chart
   if (donutChart) donutChart.destroy();
@@ -1014,6 +1007,54 @@ function render(data) {
   });
 }
 
+// Динамика портфеля: по умолчанию последние 12 месяцев, «Всё время» — вся история
+function renderTimeline() {
+  if (!lastTimeline) return;
+  const { timeline, cur } = lastTimeline;
+  let points = timeline;
+  if (timelineRange === '1y') {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    points = timeline.filter(t => t.month >= from);
+  }
+  if (timelineChart) timelineChart.destroy();
+  const tlCtx = document.getElementById('timeline-chart').getContext('2d');
+  const gradient = tlCtx.createLinearGradient(0, 0, 0, 200);
+  gradient.addColorStop(0, 'rgba(124,106,247,0.35)');
+  gradient.addColorStop(1, 'rgba(124,106,247,0)');
+  timelineChart = new Chart(tlCtx, {
+    type: 'line',
+    data: {
+      labels: points.map(t => t.label),
+      datasets: [{
+        data: points.map(t => t.value),
+        borderColor: '#7c6af7',
+        backgroundColor: gradient,
+        borderWidth: 2,
+        pointRadius: points.length <= 12 ? 4 : 2,
+        pointBackgroundColor: '#7c6af7',
+        fill: true,
+        tension: 0.35,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: { label: ctx => ' ' + fmt(ctx.parsed.y, cur) }
+      }},
+      scales: {
+        x: { grid: { color: '#2e2e3e' }, ticks: { color: '#8888aa', font: { size: 11 } } },
+        y: { grid: { color: '#2e2e3e' }, ticks: {
+          color: '#8888aa', font: { size: 11 },
+          callback: v => fmt(v, cur),
+        }},
+      }
+    }
+  });
+
+}
+
 // ── График позиции (lazy) ──
 const _chartInstances = {};
 
@@ -1021,13 +1062,13 @@ async function loadPosChart(pos, color, chartArea, cur) {
   const canvas = chartArea.querySelector('canvas');
   const loading = chartArea.querySelector('.pos-chart-loading');
 
-  const cacheKey = pos.realty_id ? `realty_${pos.realty_id}` : pos.ticker;
+  const cacheKey = pos.realty_id ? `realty_${pos.realty_id}` : (pos.key || pos.ticker);
   if (_chartInstances[cacheKey]) return;
 
   try {
     const url = pos.realty_id
       ? `/api/realty-history?user_id=${userId}&realty_id=${pos.realty_id}&currency=${currency}`
-      : `/api/asset-history?user_id=${userId}&ticker=${encodeURIComponent(pos.ticker)}&currency=${currency}`;
+      : `/api/asset-history?user_id=${userId}&ticker=${encodeURIComponent(pos.ticker)}&category=${encodeURIComponent(pos.category)}&currency=${currency}`;
     const res = await fetch(url);
     const data = await res.json();
     const pts = data.points;
@@ -1182,6 +1223,16 @@ document.querySelectorAll('.currency-btn').forEach(btn => {
     btn.classList.add('active');
     currency = btn.dataset.cur;
     load();
+  });
+});
+
+// Период графика динамики — без перезапроса, данные уже на клиенте
+document.querySelectorAll('.range-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    timelineRange = btn.dataset.range;
+    renderTimeline();
   });
 });
 

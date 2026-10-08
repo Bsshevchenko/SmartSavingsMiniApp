@@ -339,8 +339,11 @@ async def asset_history(
     user_id: int = Depends(require_user_id),
     ticker: str = Query(...),
     currency: str = Query("USD"),
+    category: str | None = Query(None),
 ):
-    """Все снапшоты одного тикера с конвертированной стоимостью."""
+    """Все снапшоты одной позиции с конвертированной стоимостью.
+    `category` различает позиции с одним кодом (брокерский RUB в «Акциях» и RUB во
+    «Вкладе», см. metrics.position_key); без неё — позиция по одному коду."""
     if not DB_PATH.exists():
         return JSONResponse({"points": []})
 
@@ -352,9 +355,11 @@ async def asset_history(
     cur.execute("""
         SELECT CAST(e.amount AS REAL) as qty,
                date(e.created_at) as day,
-               strftime('%Y-%m', e.created_at) as month
+               strftime('%Y-%m', e.created_at) as month,
+               COALESCE(cat.name, '') as category
         FROM entries e
         JOIN currencies c ON c.id = e.currency_id
+        LEFT JOIN categories cat ON cat.id = e.category_id
         WHERE e.mode = 'asset' AND e.user_id = ? AND c.code = ?
         ORDER BY e.created_at
     """, (user_id, ticker))
@@ -362,8 +367,10 @@ async def asset_history(
     src_r = curr_rates.get(ticker, 0)
     dst_r = curr_rates.get(currency, 0)
 
-    # Все снапшоты пользователя по тикеру (для маркеров изменений)
-    snapshots = cur.fetchall()  # уже отсортированы по created_at
+    # Все снапшоты позиции (для маркеров изменений), уже отсортированы по created_at
+    key = metrics.position_key(ticker, category)
+    snapshots = [s for s in cur.fetchall()
+                 if metrics.position_key(ticker, s["category"]) == key]
 
     # Первый и последний месяц со снапшотом
     if not snapshots:
@@ -473,36 +480,44 @@ async def assets_data(
     con = get_db()
     hist_rates = load_historical_rates(con)
     cur = con.cursor()
-    now = datetime.now(timezone.utc)
 
     def _conv(amount: float, src: str, dst: str, month: str) -> float:
         return convert_h(amount, src, dst, month, hist_rates, curr_rates)
 
-    # ── Последний снапшот по каждому тикеру ──
+    # ── Все снапшоты активов в хронологическом порядке ──
+    # Из них собираются и текущие позиции, и помесячная динамика, и P&L. Раньше на
+    # каждый месяц шёл отдельный запрос с коррелированным MAX(created_at) и strftime —
+    # индексы там не работают, и на слабом проде страница уползала за 5 секунд.
     cur.execute("""
-        SELECT c.code, cat.name as category,
-               CAST(e.amount AS REAL) as amt,
-               strftime('%Y-%m', e.created_at) as month,
-               date(e.created_at) as day
+        SELECT c.code AS code, COALESCE(cat.name, '') AS category,
+               strftime('%Y-%m', e.created_at) AS month,
+               date(e.created_at) AS day,
+               CAST(e.amount AS REAL) AS amt
         FROM entries e
         JOIN currencies c ON c.id = e.currency_id
         LEFT JOIN categories cat ON cat.id = e.category_id
-        WHERE e.mode = 'asset' AND e.user_id = ?
-          AND e.created_at = (
-              SELECT MAX(e2.created_at) FROM entries e2
-              WHERE e2.mode = 'asset' AND e2.user_id = e.user_id
-                AND e2.currency_id = e.currency_id
-          )
-          AND CAST(e.amount AS REAL) > 0
+        WHERE e.mode='asset' AND e.user_id=?
+        ORDER BY e.created_at
     """, (user_id,))
+    asset_rows = cur.fetchall()
+
+    # ── Текущие позиции: последний снапшот по каждой позиции ──
+    # Позиция — это тикер, а для валюты в «Акциях» ещё и категория (metrics.position_key):
+    # брокерский остаток RUB живёт отдельно от RUB во «Вкладе».
+    latest: dict[str, sqlite3.Row] = {}
+    for r in asset_rows:
+        latest[metrics.position_key(r["code"], r["category"])] = r
     positions = []
-    for r in cur.fetchall():
+    for key, r in latest.items():
+        if r["amt"] <= 0:
+            continue
         # Текущая стоимость — только актуальные курсы (не исторические)
         src_r = curr_rates.get(r["code"], 0)
         dst_r = curr_rates.get(currency, 0)
         val = r["amt"] * src_r / dst_r if src_r and dst_r else 0.0
         positions.append({
             "ticker": r["code"],
+            "key": key,
             "category": r["category"] or "Без категории",
             "qty": r["amt"],
             "price_usd": curr_rates.get(r["code"], 0),
@@ -578,36 +593,21 @@ async def assets_data(
         return total
 
     # ── Динамика: один срез на каждый месяц ──
-    # Все снапшоты разом, в хронологическом порядке. Раньше на каждый месяц шёл
-    # отдельный запрос с коррелированным MAX(created_at) и strftime — индексы там
-    # не работают, и стоимость росла как «месяцы × записи»: на слабом проде страница
-    # уползала за 5 секунд. Теперь одна выборка, а срез накапливается в памяти.
-    cur.execute("""
-        SELECT c.code AS code, COALESCE(cat.name, '') AS category,
-               strftime('%Y-%m', e.created_at) AS month,
-               CAST(e.amount AS REAL) AS amt
-        FROM entries e
-        JOIN currencies c ON c.id = e.currency_id
-        LEFT JOIN categories cat ON cat.id = e.category_id
-        WHERE e.mode='asset' AND e.user_id=?
-        ORDER BY e.created_at
-    """, (user_id,))
-    asset_rows = cur.fetchall()
     entry_months = {r["month"] for r in asset_rows}
 
     realty_months = {rr["rate_month"] for rr in realty_all_rates}
     all_months = sorted(entry_months | realty_months)
 
     timeline = []
-    snapshot: dict[str, float] = {}   # тикер → количество на конец текущего месяца
+    snapshot: dict[str, tuple] = {}   # позиция → (код, количество) на конец текущего месяца
     row_i = 0
     for m in all_months:
-        # Докатываем снапшот до конца месяца m: последняя запись по тикеру побеждает
+        # Докатываем снапшот до конца месяца m: последняя запись по позиции побеждает
         while row_i < len(asset_rows) and asset_rows[row_i]["month"] <= m:
             r = asset_rows[row_i]
-            snapshot[r["code"]] = r["amt"]
+            snapshot[metrics.position_key(r["code"], r["category"])] = (r["code"], r["amt"])
             row_i += 1
-        snap_total = sum(_conv(amt, code, currency, m) for code, amt in snapshot.items())
+        snap_total = sum(_conv(amt, code, currency, m) for code, amt in snapshot.values())
         snap_total += _realty_value_at(m)
         mo_idx = int(m[5:]) - 1
         timeline.append({
@@ -626,7 +626,7 @@ async def assets_data(
         asset_rows, realty_all_rates, all_months, currency, hist_rates, income_by_cat)
     for p in positions:
         p["pnl"] = round(pnl["realty"] if p["category"] == "Недвижимость"
-                         else pnl["by_ticker"].get(p["ticker"], 0.0), 2)
+                         else pnl["by_ticker"].get(p["key"], 0.0), 2)
     for c in by_category:
         c["pnl"] = round(pnl["by_category"].get(c["name"], 0.0), 2)
         if c["name"] in income_raw:
@@ -634,12 +634,12 @@ async def assets_data(
             c["income_sources"] = income_raw[c["name"]]["sources"]
     # Проданные тикеры: позиции нет, а результат по ней в итоге категории есть —
     # отдаём отдельным списком, иначе цифры в карточке категории не сойдутся
-    open_tickers = {p["ticker"] for p in positions}
+    open_keys = {p.get("key") for p in positions}
     closed_positions = sorted(
-        ({"ticker": code, "category": pnl["category_of"].get(code, "Без категории"),
+        ({"ticker": metrics.key_code(key), "category": pnl["category_of"].get(key, "Без категории"),
           "pnl": round(value, 2)}
-         for code, value in pnl["by_ticker"].items()
-         if code not in open_tickers and round(value, 2)),
+         for key, value in pnl["by_ticker"].items()
+         if key not in open_keys and round(value, 2)),
         key=lambda x: x["pnl"])
     closed_pnl = sum(p["pnl"] for p in closed_positions)
     # Категория могла закрыться целиком — показываем её, иначе её результат пропадёт
@@ -653,7 +653,6 @@ async def assets_data(
     # Считаем только по категории «Ликвидность» (не по всему капиталу — акции/крипта
     # волатильны и не предназначены для проедания). Среднемесячные расходы — единый
     # централизованный расчёт (metrics.avg_monthly_expense), как на аналитике/в фин-модели.
-    since_1y = (now - timedelta(days=365)).strftime("%Y-%m-%d")
     LIQUID_CATEGORIES = {"Ликвидность"}
     liquid_value = sum(p["value"] for p in positions if p["category"] in LIQUID_CATEGORIES)
     exp_metric = avg_monthly_expense(con, user_id, currency, curr_rates, hist_rates)
@@ -665,32 +664,8 @@ async def assets_data(
     coverage_pct = round(liquid_value / target_value * 100) if target_value else None
     target_gap = round(target_value - liquid_value, 2) if target_value else 0
 
-    # ── Пассивный доход ──
-    PASSIVE_KEYWORDS = ("процент", "дивиденд", "купон", "рент", "аренд", "пассив", "роялт", "кэшбэк")
-
-    cur.execute("""
-        SELECT cat.name, strftime('%Y-%m', e.created_at) as month,
-               CAST(e.amount AS REAL) as amt, c.code
-        FROM entries e
-        LEFT JOIN categories cat ON cat.id=e.category_id
-        JOIN currencies c ON c.id=e.currency_id
-        WHERE e.user_id=? AND e.mode='income'
-          AND date(e.created_at) >= ?
-    """, (user_id, since_1y))
-    passive_by_month: dict[str, float] = {}
-    passive_cats: set[str] = set()
-    this_month = now.strftime("%Y-%m")
-    for r in cur.fetchall():
-        cat_name = (r["name"] or "").lower()
-        if not any(kw in cat_name for kw in PASSIVE_KEYWORDS):
-            continue
-        passive_cats.add(r["name"] or "")
-        m = r["month"]
-        passive_by_month[m] = passive_by_month.get(m, 0) + _conv(r["amt"], r["code"], currency, m)
-
-    n_passive = len(passive_by_month)
-    avg_passive = sum(passive_by_month.values()) / n_passive if n_passive else 0
-    passive_this_month = passive_by_month.get(this_month, 0)
+    # ── Пассивный доход: среднее за скользящий год (12 завершённых месяцев) ──
+    passive = metrics.passive_income(con, user_id, currency, curr_rates, hist_rates)
 
     con.close()
 
@@ -718,9 +693,10 @@ async def assets_data(
             "target_gap": target_gap,
         },
         "passive_income": {
-            "this_month": round(passive_this_month, 2),
-            "avg_monthly": round(avg_passive, 2),
-            "categories": sorted(passive_cats),
+            "this_month": round(passive["this_month"], 2),
+            "avg_monthly": round(passive["avg"], 2),
+            "months_count": passive["months_count"],
+            "categories": passive["categories"],
         },
     })
 
@@ -792,17 +768,9 @@ async def asset_events(
     def pct(a, b):
         return (a / b - 1) * 100 if a and b else 0
 
-    # Какие валюты реально лежат в НЕСКОЛЬКИХ категориях одновременно (по дедуп-таблице
-    # asset_latest_values). RUB — в Вклад/Инвесткопилка/Акции (3 пула) → считаем по (код+кат)
-    # и суммируем. USDT/USD/акции/крипта — в одной категории → по коду (перекладка между
-    # категориями = смена ярлыка, мержим историю, новыми деньгами не считаем).
-    cur.execute("SELECT currency_code AS code, COALESCE(category_name,'') AS cat "
-                "FROM asset_latest_values WHERE user_id=?", (user_id,))
-    code_cats: dict = {}
-    for r in cur.fetchall():
-        code_cats.setdefault(r["code"], set()).add(r["cat"])
-    multi = {code for code, cats in code_cats.items() if len(cats) > 1}
-
+    # Позиции — по тому же правилу, что на странице Активов (metrics.position_key):
+    # брокерский кэш в «Акциях» отдельно, остальное по коду (перекладка между
+    # категориями = смена ярлыка, история мержится, новыми деньгами не считается).
     cur.execute("""
         SELECT c.code AS code, COALESCE(cat.name,'') AS category,
                date(e.created_at) AS d, CAST(e.amount AS REAL) AS qty
@@ -810,18 +778,17 @@ async def asset_events(
         JOIN currencies c ON c.id=e.currency_id
         LEFT JOIN categories cat ON cat.id=e.category_id
         WHERE e.mode='asset' AND e.user_id=?
-        ORDER BY c.code, e.created_at
+        ORDER BY e.created_at
     """, (user_id,))
-    by_code: dict = {}      # ключ: code (single) или (code, category) для мультипула
+    by_code: dict = {}      # ключ: metrics.position_key
     stock_codes = set()
     for r in cur.fetchall():
-        key = (r["code"], r["category"]) if r["code"] in multi else r["code"]
+        key = metrics.position_key(r["code"], r["category"])
         by_code.setdefault(key, []).append((r["d"], r["qty"]))
-        if r["category"] == "Акции":
+        if r["category"] == "Акции" and key == r["code"]:
             stock_codes.add(r["code"])
 
-    def key_code(k):
-        return k[0] if isinstance(k, tuple) else k
+    key_code = metrics.key_code
 
     def shares_at(series, iso):
         q = 0.0
@@ -920,7 +887,7 @@ async def asset_events(
     # D0. Акции — общая плашка движения (порог ±5%)
     sval_now = sval_then = 0.0
     for code in stock_codes:
-        if code not in held or code in ("RUB", "TRUR"):
+        if code not in held or code in fin_model_data.ETF_TICKERS:
             continue
         qn = shares_at(by_code[code], qty_end)
         pn, pt = price_rub(code, "now"), price_rub(code, "then")
@@ -938,7 +905,7 @@ async def asset_events(
     # D. Топ-гейнер / топ-лузер среди акций
     moves = []
     for code in stock_codes:
-        if code not in held or code in ("RUB", "TRUR"):
+        if code not in held or code in fin_model_data.ETF_TICKERS:
             continue
         pn, pt = price_rub(code, "now"), price_rub(code, "then")
         if pn and pt:

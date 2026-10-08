@@ -80,6 +80,26 @@ def price_at(lookup: dict, code: str, month: str, currency: str):
     return src / dst if src and dst else None
 
 
+# Валюта в «Акциях» — свободный остаток на брокерском счёте, который копится до
+# следующей покупки. Это отдельная позиция: снапшот «RUB в Акциях» не должен
+# перетирать «RUB во Вкладе». Всё остальное по-прежнему определяется одним кодом —
+# перенос USD из «Кэша» в «Ликвидность» остаётся сменой ярлыка, а не второй позицией.
+BROKER_CASH_CATEGORY = "Акции"
+CASH_CODES = {"RUB", "USD", "EUR", "CNY", "HKD", "VND", "THB", "MYR"}
+
+
+def position_key(code: str, category: str | None) -> str:
+    """Чем определяется позиция в снапшотной модели: обычно кодом, брокерский кэш —
+    кодом и категорией. Цена позиции всегда ищется по коду (см. key_code)."""
+    if code in CASH_CODES and category == BROKER_CASH_CATEGORY:
+        return f"{code}@{category}"
+    return code
+
+
+def key_code(key: str) -> str:
+    return key.split("@", 1)[0]
+
+
 # Доход, который приносит сам актив, а не рынок: приходит отдельной записью income
 # и в снапшотной модели неотличим от пополнения, поэтому учитывается явно.
 INCOME_TO_CATEGORY = {
@@ -136,6 +156,7 @@ def portfolio_pnl(
     и в снапшоты попадает как рост количества — он приходит отдельно, по категориям.
 
     asset_rows: строки (code, category, month, amt), отсортированные по created_at.
+    Результат по позициям (`by_ticker`, `category_of`) — по ключу position_key.
     realty_rows: строки (id, area_m2, currency, price_per_m2, rate_month) по возрастанию даты.
     """
     lookup = price_lookup(hist_rates)
@@ -153,20 +174,21 @@ def portfolio_pnl(
     for month in months:
         while row_i < len(asset_rows) and asset_rows[row_i]["month"] <= month:
             r = asset_rows[row_i]
-            qty[r["code"]] = r["amt"]
-            category_of[r["code"]] = r["category"] or "Без категории"
+            key = position_key(r["code"], r["category"])
+            qty[key] = r["amt"]
+            category_of[key] = r["category"] or "Без категории"
             row_i += 1
         realty_now = {r["id"]: r for r in realty_rows if r["rate_month"] <= month}
 
         if prev_month is not None:
-            for code, q in prev_qty.items():
+            for key, q in prev_qty.items():
                 if q <= 0:
                     continue
-                now = price_at(lookup, code, month, currency)
-                then = price_at(lookup, code, prev_month, currency)
+                now = price_at(lookup, key_code(key), month, currency)
+                then = price_at(lookup, key_code(key), prev_month, currency)
                 if now is None or then is None:
                     continue
-                by_ticker[code] = by_ticker.get(code, 0) + q * (now - then)
+                by_ticker[key] = by_ticker.get(key, 0) + q * (now - then)
             for rid, prev_rate in prev_realty.items():
                 cur_rate = realty_now.get(rid, prev_rate)
                 k_now = price_at(lookup, prev_rate["currency"], month, currency)
@@ -249,3 +271,60 @@ def avg_monthly_expense(
     win = completed[-window:]
     avg = round(sum(by_month[m] for m in win) / len(win)) if win else 0
     return {"avg": avg, "months_count": len(win), "by_month": by_month, "completed": completed}
+
+
+PASSIVE_KEYWORDS = ("процент", "дивиденд", "купон", "рент", "аренд", "пассив", "роялт", "кэшбэк")
+
+
+def _shift_month(ym: str, delta: int) -> str:
+    y, m = int(ym[:4]), int(ym[5:7]) - 1 + delta
+    return f"{y + m // 12:04d}-{m % 12 + 1:02d}"
+
+
+def passive_income(
+    con, user_id: int, currency: str, curr_rates: dict,
+    hist_rates: dict | None = None, window: int = 12,
+) -> dict:
+    """Среднемесячный пассивный доход в `currency` за скользящий год.
+
+    Окно — `window` завершённых месяцев перед текущим, делим на число месяцев окна,
+    а не на число месяцев с поступлениями: дивиденды приходят 1–2 раза в год, и
+    «среднее по месяцам с выплатами» завышало доход в разы. Если история короче
+    окна, делим на месяцы с начала учёта (первая запись пользователя).
+    """
+    if hist_rates is None:
+        hist_rates = load_historical_rates(con)
+    this_m = datetime.now(timezone.utc).strftime("%Y-%m")
+    win_from = _shift_month(this_m, -window)
+    cur = con.cursor()
+    cur.execute("SELECT MIN(strftime('%Y-%m', created_at)) AS m FROM entries WHERE user_id=?",
+                (user_id,))
+    first_m = cur.fetchone()["m"] or this_m
+    cur.execute("""
+        SELECT cat.name AS name, strftime('%Y-%m', e.created_at) AS month,
+               CAST(e.amount AS REAL) AS amt, c.code AS code
+        FROM entries e
+        LEFT JOIN categories cat ON cat.id = e.category_id
+        JOIN currencies c ON c.id = e.currency_id
+        WHERE e.user_id = ? AND e.mode = 'income'
+          AND e.created_at >= ?
+    """, (user_id, win_from + "-01"))
+    by_month: dict[str, float] = {}
+    cats: set[str] = set()
+    for r in cur.fetchall():
+        if not any(kw in (r["name"] or "").lower() for kw in PASSIVE_KEYWORDS):
+            continue
+        cats.add(r["name"] or "")
+        by_month[r["month"]] = by_month.get(r["month"], 0) + convert_h(
+            r["amt"], r["code"], currency, r["month"], hist_rates, curr_rates)
+
+    months = [m for m in (_shift_month(this_m, -i) for i in range(window, 0, -1))
+              if m >= first_m]
+    total = sum(by_month.get(m, 0) for m in months)
+    return {
+        "avg": total / len(months) if months else 0.0,
+        "total": total,
+        "months_count": len(months),
+        "this_month": by_month.get(this_m, 0.0),
+        "categories": sorted(cats),
+    }
