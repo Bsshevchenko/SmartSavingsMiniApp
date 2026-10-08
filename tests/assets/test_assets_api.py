@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import server
-from tests.conftest import make_db, seed_entry, seed_rates, USER_ID
+from tests.conftest import make_db, seed_entry, seed_rates, USER_ID, bypass_auth
 
 # ── Хелперы ──────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,7 @@ def make_client(tmp_path, rates_override=None):
     server._rates_cache["rates"] = rates
     server._rates_cache["ts"] = float("inf")  # кеш «вечный» в рамках теста
 
+    bypass_auth(server.app)
     client = TestClient(server.app, raise_server_exceptions=True)
     return client, con
 

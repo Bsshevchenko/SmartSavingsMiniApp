@@ -58,6 +58,23 @@ CREATE TABLE entries (
     FOREIGN KEY(currency_id) REFERENCES currencies(id) ON DELETE SET NULL,
     FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE SET NULL
 );
+
+CREATE TABLE realty (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    address TEXT NOT NULL,
+    area_m2 REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'RUB'
+);
+
+CREATE TABLE realty_rates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    realty_id   INTEGER NOT NULL REFERENCES realty(id) ON DELETE CASCADE,
+    price_per_m2 REAL NOT NULL,
+    rate_date   TEXT NOT NULL,
+    source      TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 USER_ID = 1
@@ -150,3 +167,14 @@ def db_with_rates():
     ])
     yield con
     con.close()
+
+def bypass_auth(app):
+    """Тесты API ходят без подписанной initData: пользователь берётся из `?user_id=`,
+    как его и передают тесты. Проверка самой подписи — в тестах tg_auth."""
+    from fastapi import Query
+    from tg_auth import require_user_id
+
+    def _user_from_query(user_id: int = Query(USER_ID)) -> int:
+        return user_id
+
+    app.dependency_overrides[require_user_id] = _user_from_query

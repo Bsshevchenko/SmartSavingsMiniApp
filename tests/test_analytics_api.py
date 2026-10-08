@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
-from tests.conftest import make_db, seed_rates, seed_entry, USER_ID
+from tests.conftest import make_db, seed_rates, seed_entry, USER_ID, bypass_auth
 
 
 @pytest.fixture
@@ -57,6 +57,7 @@ def client(test_db, monkeypatch):
     """TestClient с переопределённым DB_PATH на временную БД."""
     monkeypatch.setattr(server, "DB_PATH", test_db)
     server._rates_cache["ts"] = 0  # сбрасываем кеш курсов
+    bypass_auth(server.app)
     with TestClient(server.app) as c:
         yield c
 
