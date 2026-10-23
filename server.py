@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Query, Depends
+from fastapi import FastAPI, Query, Depends, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -137,7 +137,11 @@ def _maybe_refresh_dev_db():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _maybe_refresh_dev_db()
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    # Допуск на опоздание: по умолчанию APScheduler отбрасывает запуск, опоздавший больше
+    # чем на 1 с, — на слабом сервере так терялся ночной апдейт курсов (23.10.2026,
+    # «missed by 0:00:01.12»). Пропущенные запуски схлопываем в один.
+    scheduler = AsyncIOScheduler(timezone="UTC",
+                                 job_defaults={"misfire_grace_time": 3600, "coalesce": True})
     # Ежедневно в 02:00 UTC — обновляем текущий курс
     scheduler.add_job(_run_daily, "cron", hour=2, minute=0, id="daily_rates")
     # 1-го числа в 03:00 UTC — фиксируем среднемесячный курс за прошлый месяц
@@ -194,9 +198,23 @@ async def history_page():
     return FileResponse(WEB_DIR / "history.html")
 
 
+def _has_rate(code: str) -> bool:
+    con = sqlite3.connect(str(DB_PATH))
+    try:
+        return con.execute("SELECT 1 FROM currency_rates WHERE currency_code=? LIMIT 1",
+                           (code,)).fetchone() is not None
+    finally:
+        con.close()
+
+
 @app.post("/api/entry")
-async def create_entry(body: EntryCreate, user_id: int = Depends(require_user_id)):
+async def create_entry(body: EntryCreate, background: BackgroundTasks,
+                       user_id: int = Depends(require_user_id)):
     import asyncio
+    # Новый тикер без цены иначе показывал бы 0 до ночного апдейта курсов —
+    # подтягиваем текущие цены сразу, после ответа клиенту
+    if body.mode == "asset" and not await asyncio.to_thread(_has_rate, body.currency):
+        background.add_task(_run_daily)
     entry_id = await asyncio.to_thread(
         db_repo.save_entry,
         user_id=user_id,
