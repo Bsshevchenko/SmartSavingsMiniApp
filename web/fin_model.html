@@ -289,7 +289,7 @@
       <div class="ctrl-hint" style="margin-top:6px">
         Завершённые месяцы: серый — стоимость, зелёный снизу — насколько рынок добавил сверх вложенного,
         красный под осью — насколько рынок отнял. Текущий месяц — факт начала + прирост + ожид. дивиденды.
-        Прогнозные пополнения (500к) идут со следующего месяца.
+        Прогнозные пополнения идут со следующего месяца.
       </div>
 
       <div style="font-size:12px;font-weight:600;color:var(--sub);margin:16px 0 8px">
@@ -323,8 +323,8 @@
     <div class="ctrl">
       <div class="ctrl-row">
         <div class="ctrl-head"><label>Пополнение, ₽/мес</label></div>
-        <input type="number" autocomplete="off" class="ctrl-num" id="c-contrib" value="500000" min="0" step="10000">
-        <input type="range" id="c-contrib-r" min="0" max="1000000" step="10000" value="500000" style="margin-top:8px">
+        <input type="number" autocomplete="off" class="ctrl-num" id="c-contrib" value="400000" min="0" step="10000">
+        <input type="range" id="c-contrib-r" min="0" max="1000000" step="10000" value="400000" style="margin-top:8px">
       </div>
       <div class="ctrl-row">
         <div class="ctrl-head"><label>Рост тела (цены акций), %/год</label><span class="val" id="v-pg">8%</span></div>
@@ -388,13 +388,13 @@ let activeYear = 2026;    // активная вкладка года
 
 // Стратегия распределения новых денег (по умолчанию)
 const ALLOCATION = [
-  { t:'SBER', name:'Сбер',        note:'якорь, поток',     w:30 },
-  { t:'X5',   name:'X5',          note:'поток, защита',    w:23 },
-  { t:'MDMG', name:'Мать и дитя', note:'поток + рост',     w:15 },
-  { t:'PLZL', name:'Полюс',       note:'защита (золото)',  w:12 },
-  { t:'YDEX', name:'Яндекс',      note:'рост тела',        w:8  },
-  { t:'NVTK', name:'Новатэк',     note:'поток',            w:7  },
-  { t:'OZON', name:'Ozon',        note:'эксперимент',      w:5  },
+  { t:'SBER', name:'Сбер',        note:'якорь, поток',     w:50  },
+  { t:'X5',   name:'X5',          note:'поток, защита',    w:15  },
+  { t:'MDMG', name:'Мать и дитя', note:'поток + рост',     w:15  },
+  { t:'NVTK', name:'Новатэк',     note:'поток',            w:10  },
+  { t:'YDEX', name:'Яндекс',      note:'рост тела',        w:5   },
+  { t:'PLZL', name:'Полюс',       note:'защита (золото)',  w:2.5 },
+  { t:'OZON', name:'Ozon',        note:'эксперимент',      w:2.5 },
 ];
 const ALLOC_TICKERS = new Set(ALLOCATION.map(a => a.t));
 
@@ -842,8 +842,8 @@ function buildAllocationTable() {
     tr.innerHTML = `
       <td style="text-align:left">${a.name}
         <div style="font-size:10px;color:var(--sub);font-weight:400">${a.t} · ${a.note}</div></td>
-      <td><input class="w-input" type="number" min="0" max="100" step="1" autocomplete="off"
-            data-ticker="${a.t}" value="${Math.round((targetWeights[a.t]||0)*100)}"></td>
+      <td><input class="w-input" type="number" min="0" max="100" step="0.5" autocomplete="off"
+            data-ticker="${a.t}" value="${+((targetWeights[a.t]||0)*100).toFixed(1)}"></td>
       <td id="af-${a.t}">—</td><td id="ap-${a.t}">—</td>`;
     tb.appendChild(tr);
   }
@@ -886,7 +886,7 @@ function updateAllocationNumbers(perTicker) {
 
   const sum = ALLOCATION.reduce((s,a)=> s + (targetWeights[a.t]||0), 0) * 100;
   const el = document.getElementById('alloc-sum');
-  el.textContent = sum.toFixed(0) + '%';
+  el.textContent = +sum.toFixed(1) + '%';
   el.style.color = Math.abs(sum-100) > 1 ? 'var(--yellow)' : 'var(--text)';
 }
 
